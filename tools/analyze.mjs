@@ -21,8 +21,10 @@ const manifest = JSON.parse(fs.readFileSync(path.join(DATA, 'cxpc-manifest.json'
   const byTicker = new Map();
   for (const line of zlib.gunzipSync(fs.readFileSync(path.join(DATA, 'cxpc-daily.jsonl.gz'))).toString('utf8').split('\n')) {
     if (!line) continue;
-    const [t, cx, d, o, h, l, c, v, n] = JSON.parse(line);
+    // upstream row order is [ticker, cx, day, OPEN, CLOSE, HIGH, LOW, volume, traded]
+    const [t, cx, d, o, c, h, l, v, n] = JSON.parse(line);
     if (!(Number(c) > 0)) continue;
+    if (Number(h) < Number(l)) throw new Error('OHLC order sanity check failed for ' + t + ' ' + cx);
     if (!byTicker.has(t)) byTicker.set(t, { t, series: {} });
     const rec = byTicker.get(t);
     (rec.series[cx] = rec.series[cx] || []).push([d, Number(o) || Number(c), Number(h) || Number(c), Number(l) || Number(c), Number(c), Number(v) || 0, Number(n) || 0]);
