@@ -516,6 +516,12 @@ for (const [t, s2] of Object.entries(supply)) {
   s2.expectedNextMonth4 = +(100 * (fit4.beta[0] + fit4.beta[1] * r4.surplus + fit4.beta[2] * r4.growth + fit4.beta[3] * r4.ppu + fit4.beta[4] * r4.xmargin)).toFixed(2);
 }
 for (const b of board) { const s3 = supply[b.ticker]; if (s3) { b.extractionMarginPct = s3.extractionMarginPct == null ? null : s3.extractionMarginPct; b.supplyExpectedPct = s3.expectedNextMonthPct; } }
+// supply.json must be written AFTER the model info exists (it was written earlier in the supply block)
+fs.writeFileSync(path.join(SITE, 'supply.json'), JSON.stringify({ generatedAt: new Date().toISOString(), month: lastMonth,
+  model: 'next-month log return = a + b1*surplus + b2*supplyGrowth + b3*profitPerUnit + b4*extractionMargin (monthly panel, in-sample)',
+  fit: supplyModelInfo.fit4, fit3: supplyModelInfo.fit3, ic: supplyModelInfo.ic,
+  note: 'surplus = (产量 - 消耗) / max(产量, 消耗)；raw = 有行星丰度数据的可采掘材料；extractionMargin 单独作因子时 IC 最强（18/18 月为负），但 OLS 系数不稳，期望值仍用三因子模型',
+  byTicker: supply }, null, 1));
 const supplyModelInfo = { fit3: { beta: fit3.beta, sigma: fit3.sigma, r2: fit3.r2, n: fit3.n }, fit4: { beta: fit4.beta, sigma: fit4.sigma, r2: fit4.r2, n: fit4.n }, ic: { surplus: mIC(r => r.surplus, r => r.ret), supplyGrowth: mIC(r => r.growth, r => r.ret), profitPerUnit: mIC(r => r.ppu, r => r.ret), extractionMargin: mIC(r => r.xmargin, r => r.ret), extractionMarginRaw: mIC(r => r.xmargin, r => r.ret, 'raw'), surplusRaw: mIC(r => r.surplus, r => r.ret, 'raw') } };
 globalThis.__supplyModelInfo = supplyModelInfo;
 
