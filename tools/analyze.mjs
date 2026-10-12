@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 import { workersOf, dailyWorkforceCost, DAY_MS } from './baskets.mjs';
+import { TRIP_COST, TRIP_COST_SOURCE, breakEvenUnits } from './transport.mjs';
 
 const DATA = path.join(ROOT, 'data');
 const SITE = path.join(ROOT, 'site', 'data');
@@ -304,6 +305,42 @@ fs.writeFileSync(path.join(SITE, 'forecast.json'), JSON.stringify({ generatedAt:
   fit90: { beta: fit90.beta, sigma: fit90.sigma, r2: fit90.r2, n: fit90.n },
   bySeries: forecasts }, null, 1));
 console.log('forecasts:', Object.keys(forecasts).length);
+
+// cross-exchange price gaps vs the cost of a trip (rough constant)
+const byTicker = new Map();
+for (const [key, arr] of bySeries) {
+  const [t, cx] = key.split('|');
+  const last = arr[arr.length - 1];
+  if (!last || !(last.c > 0)) continue;
+  if (Math.round((Date.now() - last.d) / 86400000) > 14) continue;
+  if (!byTicker.has(t)) byTicker.set(t, { ticker: t, name: (feats[t] || {}).name || '', prices: {}, days: {} });
+  byTicker.get(t).prices[cx] = last.c;
+  byTicker.get(t).days[cx] = new Date(last.d).toISOString().slice(0, 10);
+}
+const freight = {};
+for (const [t, rec] of byTicker) {
+  const pairs = Object.entries(rec.prices);
+  if (pairs.length < 2) continue;
+  const sorted = pairs.slice().sort((a, b) => a[1] - b[1]);
+  const cheap = sorted[0], dear = sorted[sorted.length - 1];
+  const spread = dear[1] - cheap[1];
+  freight[t] = {
+    name: rec.name, prices: rec.prices, days: rec.days,
+    cheapest: cheap[0], dearest: dear[0], spreadPerUnit: +spread.toFixed(3),
+    spreadPct: cheap[1] ? +(spread / cheap[1] * 100).toFixed(2) : null,
+    breakEvenUnits: breakEvenUnits(spread),
+  };
+}
+for (const b of board) {
+  const f = freight[b.ticker];
+  if (!f || !f.prices[b.cx] || !f.prices[f.cheapest]) continue;
+  const gap = f.prices[b.cx] - f.prices[f.cheapest];
+  b.vsCheapest = +gap.toFixed(3);
+  b.vsCheapestPct = f.prices[f.cheapest] ? +(gap / f.prices[f.cheapest] * 100).toFixed(2) : null;
+  b.breakEvenUnits = breakEvenUnits(gap);
+}
+fs.writeFileSync(path.join(SITE, 'freight.json'), JSON.stringify({ generatedAt: new Date().toISOString(), tripCost: TRIP_COST, tripCostSource: TRIP_COST_SOURCE, note: 'breakEvenUnits = 10,000 / (该商品在本所与最低价交易所的单价差)：低于这个量，跑一趟不划算', byTicker: freight }, null, 1));
+console.log('freight rows:', Object.keys(freight).length);
 
 const z = (arr) => { const m = mean(arr), s = sd(arr) || 1; return (x) => (x - m) / s; };
 const zDemand = z(board.map(b => (b.recipeDownstream || 0) + (b.constructionDownstream || 0)));
