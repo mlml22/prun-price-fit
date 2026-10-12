@@ -158,9 +158,9 @@ const signCls = (x) => x == null ? '' : (x > 0 ? 'pos' : (x < 0 ? 'neg' : ''));
         <td>${v.profitPerUnit == null ? '—' : fmt(v.profitPerUnit, 1)}</td>
         <td class="dim">${num(Math.round((v.volume || 0) / 1e6))}M</td>
         <td class="${signCls(v.expectedNextMonthPct)}"><b>${v.expectedNextMonthPct == null ? '—' : (v.expectedNextMonthPct > 0 ? '+' : '') + fmt(v.expectedNextMonthPct, 1) + '%'}</b></td>
-        <td>${EX[v.ticker] ? fmt(EX[v.ticker].costPerUnit, 1) + ' <span class="dim">(' + fmt(EX[v.ticker].marginPct, 0) + '%)</span>' : '—'}</td>
-        <td class="dim">${EX[v.ticker] ? EX[v.ticker].planets : '—'}</td>
-        <td class="dim">${EX[v.ticker] ? fmt(EX[v.ticker].bestFactor, 3) : '—'}</td></tr>`).join('');
+        <td>${EX[t] ? fmt(EX[t].costPerUnit, 1) + ' <span class="dim">(' + fmt(EX[t].marginPct, 0) + '%)</span>' : '—'}</td>
+        <td class="dim">${EX[t] ? EX[t].planets : '—'}</td>
+        <td class="dim">${EX[t] ? fmt(EX[t].bestFactor, 3) : '—'}</td></tr>`).join('');
     };
     paint();
     const rf = document.getElementById('rawFilter');
