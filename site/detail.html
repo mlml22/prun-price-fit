@@ -56,6 +56,9 @@
   <div class="wrap"><canvas id="cv"></canvas><div class="tip" id="tip"></div></div>
   <div class="note" id="fcNote"></div>
 
+  <h2>采掘成本（原料专有）</h2>
+  <div id="extractBox"></div>
+
   <h2>月度供给（社区产能统计）</h2>
   <div id="supplyBox"></div>
 
@@ -78,7 +81,7 @@ const params = new URLSearchParams(location.search);
 const T = (params.get('t') || 'RAT').toUpperCase();
 let ZH = {};   // ticker -> Chinese name
 
-let DATA = null, BOARD = null, FORECAST = null, FREIGHT = null, SUPPLY = null, FC = null, cxList = [], cx = params.get('cx'), view = null, hover = null;
+let DATA = null, BOARD = null, FORECAST = null, FREIGHT = null, SUPPLY = null, EXTRACTION = null, FC = null, cxList = [], cx = params.get('cx'), view = null, hover = null;
 const FUTURE_FRAC = 0.18;   // share of the plot width reserved for the model's forward path
 
 const cv = $('#cv'), ctx = cv.getContext('2d');
@@ -258,6 +261,7 @@ function breakdownHtml(row) {
   ZH = await fetch('materials-zh.json').then(r => r.json()).then(j => j.byTicker || {}).catch(() => ({}));
   FREIGHT = await fetch('data/freight.json?v=' + ver).then(r => r.json()).catch(() => null);
   SUPPLY = await fetch('data/supply.json?v=' + ver).then(r => r.json()).catch(() => null);
+  EXTRACTION = await fetch('data/extraction.json?v=' + ver).then(r => r.json()).catch(() => null);
   const fcRes = await fetch('data/forecast.json?v=' + ver).then(r => r.json()).catch(() => null);
   FORECAST = fcRes;
   FC = (fcRes && fcRes.bySeries && fcRes.bySeries[T + '|' + cx]) || null;
@@ -279,6 +283,7 @@ function breakdownHtml(row) {
   $('#breakdown').innerHTML = breakdownHtml(row);
   renderFreight();
   renderSupply();
+  renderExtraction();
   $('#bnote').textContent = '人工成本 = Σ(该建筑各层级工人数/100 × 该层级「每 100 人每日消耗品篮子」) × 生产时长 ÷ 产出数量。先驱/定居者篮子已与官方手册核对；技术员/工程师/科学家篮子取自游戏自带的 PAC 人口配方（÷10 折算成日）；不含建筑折旧与税费。';
   if (FORECAST && FORECAST.fit30) {
     $('#fcNote').innerHTML = '虚线 = 拟合模型给出的<b>价格路径预期</b>（r = a + b1×离 10 日均线距离 + b2×总毛利率 + b3×低波动），阴影 = ±1σ 残差区间。样本内拟合：30 天 R² ' + (FORECAST.fit30.r2 * 100).toFixed(1) + '%、σ ' + (FORECAST.fit30.sigma * 100).toFixed(1) + '%；90 天 R² ' + (FORECAST.fit90.r2 * 100).toFixed(1) + '%、σ ' + (FORECAST.fit90.sigma * 100).toFixed(1) + '%。不是投资建议，残差很大。';
@@ -288,6 +293,16 @@ function breakdownHtml(row) {
   resize();
 })();
 
+function renderExtraction() {
+  const box = document.getElementById('extractBox');
+  const e = EXTRACTION && EXTRACTION.byMaterial && EXTRACTION.byMaterial[T];
+  if (!e) { box.innerHTML = '<div class="note">该商品不是采掘类（没有行星资源丰度数据），成本锚走配方那一套。</div>'; return; }
+  box.innerHTML = `<table><thead><tr><th>建筑</th><th>最佳行星</th><th>丰度</th><th>产出/天</th><th>人工/天</th><th>折旧/天</th><th>单件成本</th><th>现价</th><th>毛利</th><th>中位丰度成本</th><th>可选行星</th></tr></thead><tbody><tr>
+    <td>${e.building}</td><td>${e.bestPlanet}</td><td>${fmt(e.bestFactor, 3)}</td><td>${fmt(e.unitsPerDay, 1)}</td>
+    <td>${fmt(e.labour, 0)}</td><td>${fmt(e.wear, 0)}</td><td><b>${fmt(e.costPerUnit, 1)}</b></td><td>${fmt(e.price, 1)}</td>
+    <td class="${signCls(e.marginPct)}"><b>${fmt(e.marginPct, 1)}%</b></td><td>${fmt(e.costAtMidFactor, 1)}</td><td>${int(e.planets)}</td></tr></tbody></table>
+    <div class="note">口径：<b>产出/天 = 70 × 行星丰度</b>（用你自己基地的 RIG/EXT 订单标定：5 个行星、92 条订单，误差 0）；日成本 = 工人消耗品（先驱篮子）+ 建筑损耗，均按当前市价折算。「中位丰度成本」= 在全服中位丰度行星上挖的单价：价格长期低于它，边际矿工就会退出。</div>`;
+}
 function renderSupply() {
   const s = SUPPLY && SUPPLY.byTicker && SUPPLY.byTicker[T];
   const box = document.getElementById('supplyBox');
