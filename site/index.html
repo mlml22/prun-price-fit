@@ -109,7 +109,7 @@ const signCls = (x) => x == null ? '' : (x > 0 ? 'pos' : (x < 0 ? 'neg' : ''));
 (async () => {
   // cache-bust with the payload version (GitHub's CDN caches for 10 minutes)
   ZH = await fetch('materials-zh.json').then(r => r.json()).then(j => j.byTicker || {}).catch(() => ({}));
-  EX = await fetch('data/extraction.json').then(r => r.json()).then(j => j.byMaterial || {}).catch(() => ({}));
+  EX = await fetch('data/extraction.json?ts=' + Date.now()).then(r => r.json()).then(j => j.byMaterial || {}).catch(() => ({}));
   const metaV = await fetch('data/meta.json?ts=' + Date.now()).then(r => r.json());
   const ver = encodeURIComponent(metaV.generatedAt || String(Date.now()));
   const [meta, fit, board, inflation] = await Promise.all([
