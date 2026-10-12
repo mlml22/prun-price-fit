@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 import { workersOf, dailyWorkforceCost, DAY_MS } from './baskets.mjs';
 import { TRIP_COST, TRIP_COST_SOURCE, breakEvenUnits } from './transport.mjs';
+import { loadRaylu, monthKey, rawSet } from './raylu.mjs';
 
 const DATA = path.join(ROOT, 'data');
 const SITE = path.join(ROOT, 'site', 'data');
@@ -102,6 +103,8 @@ for (const line of zlib.gunzipSync(fs.readFileSync(path.join(DATA, 'dataset.json
 
 const priceAtGlobal = new Map();
 for (const r of rows) { const k = r.t + '|' + r.cx; if (!priceAtGlobal.has(k)) priceAtGlobal.set(k, new Map()); priceAtGlobal.get(k).set(r.d, r.c); }
+const priceByMonth = new Map();
+for (const r of rows) { const day = new Date(r.d); const mk = day.getUTCFullYear() + '-' + String(day.getUTCMonth() + 1).padStart(2, '0'); if (!priceByMonth.has(r.t)) priceByMonth.set(r.t, new Map()); const m = priceByMonth.get(r.t); if (!m.has(mk)) m.set(mk, []); m.get(mk).push(r.c); }
 const bySeries = new Map();
 for (const r of rows) { const k = r.t + '|' + r.cx; if (!bySeries.has(k)) bySeries.set(k, []); bySeries.get(k).push(r); }
 for (const arr of bySeries.values()) {
@@ -229,9 +232,12 @@ console.log('forecast model r90: r2=' + (fit90.r2 * 100).toFixed(2) + '% sigma='
 // ---- 3) today's board ----
 // cost breakdown for the detail page: best producing recipe + labour basket, priced on the row's own day
 const CACHE = path.join(ROOT, 'cache');
+const RAYLU = await loadRaylu(CACHE);
+let RAW_SET = new Set();
 let RECIPES = [], BUILDINGS = [];
 try { RECIPES = JSON.parse(fs.readFileSync(path.join(CACHE, 'recipes.json'), 'utf8')); } catch { /* optional */ }
 try { BUILDINGS = JSON.parse(fs.readFileSync(path.join(CACHE, 'buildings.json'), 'utf8')); } catch { /* optional */ }
+RAW_SET = rawSet(RECIPES);
 const buildingOfWork = new Map(BUILDINGS.map(b => [b.building_ticker, b]));
 const recipesByOutput = new Map();
 for (const r of RECIPES) {
@@ -341,6 +347,63 @@ for (const b of board) {
 }
 fs.writeFileSync(path.join(SITE, 'freight.json'), JSON.stringify({ generatedAt: new Date().toISOString(), tripCost: TRIP_COST, tripCostSource: TRIP_COST_SOURCE, note: 'breakEvenUnits = 10,000 / (该商品在本所与最低价交易所的单价差)：低于这个量，跑一趟不划算', byTicker: freight }, null, 1));
 console.log('freight rows:', Object.keys(freight).length);
+
+// ---- monthly supply/demand model (raylu production flows) ----
+const rayMonths = Object.keys(RAYLU).sort();
+const pm = (t, mk) => { const arr = (priceByMonth.get(t) || new Map()).get(mk); if (!arr || !arr.length) return null; const s = arr.slice().sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
+const supplyRows = [];
+for (let i = 0; i < rayMonths.length; i++) {
+  const m = rayMonths[i], mk = monthKey(m), nxt = rayMonths[i + 1], prev = i > 0 ? rayMonths[i - 1] : null;
+  for (const [t, v] of Object.entries(RAYLU[m])) {
+    const p = pm(t, mk), pNext = nxt ? pm(t, monthKey(nxt)) : null;
+    const pv = prev ? RAYLU[prev][t] : null;
+    supplyRows.push({ month: m, t, raw: !RAW_SET.has(t), amount: v.amount, consumed: v.consumed, volume: v.volume, profit: v.profit,
+      ret: (p && pNext && p > 0) ? Math.log(pNext / p) : null,
+      surplus: (v.amount && v.consumed != null) ? (v.amount - v.consumed) / Math.max(v.amount, v.consumed) : null,
+      growth: (pv && pv.amount) ? v.amount / pv.amount - 1 : null,
+      ppu: v.amount ? v.profit / v.amount : null,
+    });
+  }
+}
+function monthlyOls(rowsIn) {
+  const X = rowsIn.map(r => [1, r.surplus, r.growth, r.ppu]);
+  const y = rowsIn.map(r => r.ret);
+  const k = 4;
+  const XtX = Array.from({ length: k }, () => new Array(k).fill(0));
+  const Xty = new Array(k).fill(0);
+  for (let i = 0; i < X.length; i++) for (let a = 0; a < k; a++) { Xty[a] += X[i][a] * y[i]; for (let b = 0; b < k; b++) XtX[a][b] += X[i][a] * X[i][b]; }
+  for (let i = 0; i < k; i++) XtX[i][i] *= 1.000001;
+  const M = XtX.map((r2, i) => r2.concat([Xty[i]]));
+  for (let c = 0; c < k; c++) {
+    let piv = c; for (let r2 = c + 1; r2 < k; r2++) if (Math.abs(M[r2][c]) > Math.abs(M[piv][c])) piv = r2;
+    const tmp = M[c]; M[c] = M[piv]; M[piv] = tmp;
+    if (!M[c][c]) continue;
+    for (let r2 = 0; r2 < k; r2++) { if (r2 === c) continue; const f2 = M[r2][c] / M[c][c]; for (let c2 = c; c2 <= k; c2++) M[r2][c2] -= f2 * M[c][c2]; }
+  }
+  const beta = M.map((row, i) => (row[i] ? row[k] / row[i] : 0));
+  let sse = 0, sst = 0;
+  const my = y.reduce((a, b) => a + b, 0) / y.length;
+  for (let i = 0; i < X.length; i++) { const pred = X[i].reduce((a, v, j2) => a + v * beta[j2], 0); sse += (y[i] - pred) ** 2; sst += (y[i] - my) ** 2; }
+  return { beta, sigma: Math.sqrt(sse / Math.max(1, X.length - k)), r2: sst ? 1 - sse / sst : 0, n: X.length };
+}
+const supplyUsable = supplyRows.filter(r => r.ret != null && r.surplus != null && r.growth != null && r.ppu != null);
+const supplyFit = supplyUsable.length > 20 ? monthlyOls(supplyUsable) : null;
+if (supplyFit) console.log('supply model: r2=' + (supplyFit.r2 * 100).toFixed(1) + '% sigma=' + (supplyFit.sigma * 100).toFixed(1) + '% n=' + supplyFit.n + ' beta=' + supplyFit.beta.map(x => x.toFixed(4)).join(','));
+// last-month flows per material + model expectation for the next month
+const lastMonth = rayMonths[rayMonths.length - 1];
+const supply = {};
+for (const [t, v] of Object.entries(RAYLU[lastMonth] || {})) {
+  const prev = rayMonths.length > 1 ? (RAYLU[rayMonths[rayMonths.length - 2]] || {})[t] : null;
+  const surplus = (v.amount && v.consumed != null) ? (v.amount - v.consumed) / Math.max(v.amount, v.consumed) : null;
+  const growth = (prev && prev.amount) ? v.amount / prev.amount - 1 : null;
+  const ppu = v.amount ? v.profit / v.amount : null;
+  const expected = (supplyFit && surplus != null && growth != null && ppu != null)
+    ? +(100 * (supplyFit.beta[0] + supplyFit.beta[1] * surplus + supplyFit.beta[2] * growth + supplyFit.beta[3] * ppu)).toFixed(2) : null;
+  supply[t] = { month: lastMonth, name: (feats[t] || {}).name || '', raw: !RAW_SET.has(t), amount: v.amount, consumed: v.consumed, volume: v.volume, profit: v.profit, surplus: surplus == null ? null : +(surplus * 100).toFixed(1), supplyGrowthPct: growth == null ? null : +(growth * 100).toFixed(1), profitPerUnit: ppu == null ? null : +ppu.toFixed(2), expectedNextMonthPct: expected };
+}
+for (const b of board) { const s = supply[b.ticker]; if (s) { b.supplySurplusPct = s.surplus; b.supplyGrowthPct = s.supplyGrowthPct; b.supplyExpectedPct = s.expectedNextMonthPct; b.isRaw = s.raw; } }
+fs.writeFileSync(path.join(SITE, 'supply.json'), JSON.stringify({ generatedAt: new Date().toISOString(), month: lastMonth, model: 'next-month log return = a + b1*surplus + b2*supplyGrowth + b3*profitPerUnit (monthly panel, in-sample)', fit: supplyFit, note: 'surplus = (产量 - 消耗) / max(产量, 消耗)；raw = 不由任何消耗型配方生产的材料（采掘类）', byTicker: supply }, null, 1));
+console.log('supply rows:', Object.keys(supply).length, '| raw:', Object.values(supply).filter(x => x.raw).length);
 
 const z = (arr) => { const m = mean(arr), s = sd(arr) || 1; return (x) => (x - m) / s; };
 const zDemand = z(board.map(b => (b.recipeDownstream || 0) + (b.constructionDownstream || 0)));
