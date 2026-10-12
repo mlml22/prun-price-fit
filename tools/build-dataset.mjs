@@ -1,5 +1,5 @@
 // build-dataset.mjs - modelling table: daily prices + game structure + materials cost anchor + labour cost.
-// Row: [ticker, cx, day, close, volume, traded, matCost, matMargin, matMarginPct, r7, r30, r90, labourCost, totCost, totMarginPct]
+// Row: [ticker, cx, day, close, volume, traded, matCost, matMargin, matMarginPct, r7, r30, r90, labourCost, totCost, totMarginPct, depreciationCost]
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -13,6 +13,7 @@ fs.mkdirSync(CACHE, { recursive: true });
 const UA = { 'User-Agent': 'prun-price-fit/1.0 (read-only)', Accept: 'application/json,*/*' };
 
 import { BASKETS, DAY_MS } from './baskets.mjs';
+import { repairPerDay } from './depreciation.mjs';
 
 
 async function gameData(name, url) {
@@ -143,6 +144,10 @@ await pipeline(async function* () {
     const [ticker, cx] = key.split('|');
     const recs = producers.get(ticker) || [];
     // labour cost per unit = sum over tiers of (workers/100 * daily basket cost) * (duration in days) / output
+    // daily wear: the repair materials a building burns by existing for one day, priced here
+    const depRecs = recs.map(r => ({
+      building: r.building, days: r.timeMs / DAY_MS, outAmount: r.outAmount || 1, wear: repairPerDay(r.building),
+    }));
     const labourRecs = recs.map(r => {
       const w = buildingWorkers.get(r.building);
       if (!w) return null;
@@ -175,15 +180,27 @@ await pipeline(async function* () {
         const unit = per * lr.days / (lr.outAmount || 1);
         if (labour == null || unit < labour) labour = unit;
       }
+      let dep = null;
+      for (const dr of depRecs) {
+        let perDay = 0, ok = true;
+        for (const [mat, amount] of Object.entries(dr.wear)) {
+          const pr = priceNear(mat, cx, d);
+          if (pr == null) { ok = false; break; }
+          perDay += pr * amount;
+        }
+        if (!ok) continue;
+        const unit = perDay * dr.days / dr.outAmount;
+        if (dep == null || unit < dep) dep = unit;
+      }
       const fwd = (k) => (i + k < arr.length ? Math.log(arr[i + k].c / c) : null);
       const mg = cost != null ? c - cost : null;
       const mgp = cost != null && c > 0 ? mg / c : null;
-      const tot = (cost != null) ? cost + (labour || 0) : null;
+      const tot = (cost != null) ? cost + (labour || 0) + (dep || 0) : null;
       const tmp = tot != null && c > 0 ? (c - tot) / c : null;
       if (cost != null) { withCost++; matMargins.push(mgp); }
       if (tot != null) { withLabour++; totMargins.push(tmp); }
       rows++;
-      yield JSON.stringify([ticker, cx, d, c, v, n, cost, mg, mgp, fwd(7), fwd(30), fwd(90), labour, tot, tmp]) + '\n';
+      yield JSON.stringify([ticker, cx, d, c, v, n, cost, mg, mgp, fwd(7), fwd(30), fwd(90), labour, tot, tmp, dep]) + '\n';
     }
   }
 }(), zlib.createGzip({ level: 6 }), fs.createWriteStream(path.join(DATA, 'dataset.jsonl.gz')));
