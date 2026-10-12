@@ -1,8 +1,11 @@
 name: daily-fit
 
+# 08:08 and 20:08 Beijing time (= 00:08 / 12:08 UTC).
+# Manual runs never share a concurrency group with scheduled runs, so a manual
+# refresh can never cancel or queue-block an automatic one; deployments serialise.
 on:
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "8 0,12 * * *"
   workflow_dispatch:
 
 permissions:
@@ -10,13 +13,12 @@ permissions:
   pages: write
   id-token: write
 
-concurrency:
-  group: pages-${{ github.event_name }}
-  cancel-in-progress: false
-
 jobs:
   build:
     runs-on: ubuntu-latest
+    concurrency:
+      group: build-${{ github.event_name }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -35,6 +37,9 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
