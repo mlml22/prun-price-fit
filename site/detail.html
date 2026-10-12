@@ -211,7 +211,11 @@ function breakdownHtml(row) {
 }
 
 (async () => {
-  const [hres, bres] = await Promise.all([fetch(`data/hist/${T}.json.gz`), fetch('data/board.json')]);
+  // use the payload version as a cache buster: GitHub's CDN caches for 10 minutes otherwise,
+  // which makes a fresh update look stale (found the hard way).
+  const meta = await (await fetch('data/meta.json?ts=' + Date.now())).json();
+  const ver = meta && meta.generatedAt ? encodeURIComponent(meta.generatedAt) : String(Date.now());
+  const [hres, bres] = await Promise.all([fetch(`data/hist/${T}.json.gz?v=${ver}`), fetch('data/board.json?v=' + ver)]);
   const json = JSON.parse(await new Response(hres.body.pipeThrough(new DecompressionStream('gzip'))).text());
   BOARD = await bres.json();
   DATA = json;
