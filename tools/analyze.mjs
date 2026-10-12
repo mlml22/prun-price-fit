@@ -131,6 +131,8 @@ const F = {
   lowVol: { label: 'low 20d volatility', fn: r => (r.vol20 != null ? -r.vol20 : null) },
   liquidity: { label: 'log 30d traded money', fn: r => (r.liq30 != null ? Math.log(1 + r.liq30) : null) },
   rangePosition: { label: 'position in 90d range (low = cheap)', fn: r => (r.hi90 && r.hi90 > r.lo90 ? -(r.c - r.lo90) / (r.hi90 - r.lo90) : null) },
+  supplyScore: { label: 'monthly supply score (percentile, high = bullish)', fn: r => scoreFor(r.t, r.d) },
+  comboScore: { label: 'combo: mean-reversion + supply score', fn: r => { const mr = r.sma10 ? -(r.c / r.sma10 - 1) : null; const ss = scoreFor(r.t, r.d); if (mr == null || ss == null) return null; return mr * 100 + (ss - 50); } },
 };
 
 function rankify(vals) {
@@ -147,41 +149,6 @@ function corr(a, b) {
 }
 const mean = (a) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : NaN;
 const sd = (a) => { const m = mean(a); return a.length > 1 ? Math.sqrt(a.reduce((x, y) => x + (y - m) ** 2, 0) / (a.length - 1)) : NaN; };
-
-const dates = [...byDate.keys()].sort((a, b) => a - b);
-const methods = [];
-for (const h of [30, 90]) {
-  const target = h === 30 ? 'r30' : 'r90';
-  for (const [key, spec] of Object.entries(F)) {
-    const ics = [], byYear = {}; let top = 0, all = 0, nTop = 0, nAll = 0, xs = 0;
-    for (const d of dates) {
-      const usable = byDate.get(d).filter(r => r[target] != null);
-      if (usable.length < 60) continue;
-      const pairs = usable.map(r => [spec.fn(r), r]).filter(x => x[0] != null && Number.isFinite(x[0]));
-      if (pairs.length < 60) continue;
-      xs++;
-      const ic = corr(rankify(pairs.map(x => x[0])), rankify(pairs.map(x => x[1][target])));
-      ics.push(ic);
-      const y = new Date(d).toISOString().slice(0, 4);
-      (byYear[y] = byYear[y] || []).push(ic);
-      const sorted = pairs.slice().sort((a, b) => b[0] - a[0]);
-      const k = Math.max(5, Math.floor(sorted.length * 0.1));
-      for (const x of sorted.slice(0, k)) { top += x[1][target]; nTop++; }
-      for (const x of pairs) { all += x[1][target]; nAll++; }
-    }
-    if (!ics.length) continue;
-    methods.push({
-      key, label: spec.label, horizonDays: h, crossSections: xs,
-      meanIC: +(mean(ics) * 100).toFixed(2),
-      tStat: +(mean(ics) / (sd(ics) / Math.sqrt(ics.length))).toFixed(1),
-      icPositivePct: Math.round(ics.filter(x => x > 0).length / ics.length * 100),
-      topDecileReturnPct: +((top / nTop) * 100).toFixed(2),
-      universeReturnPct: +((all / nAll) * 100).toFixed(2),
-      spreadPct: +(((top / nTop) - (all / nAll)) * 100).toFixed(2),
-      byYear: Object.fromEntries(Object.entries(byYear).map(([y, v]) => [y, +(mean(v) * 100).toFixed(1)])),
-    });
-  }
-}
 
 // ---- 2b) forecast model: expected forward log return from three validated factors ----
 // r30 ~ a + b1*(-(p/sma10-1)) + b2*totalMarginPct + b3*(-vol20)   (pooled OLS, in-sample)
@@ -517,6 +484,31 @@ for (const [t, s2] of Object.entries(supply)) {
 }
 for (const b of board) { const s3 = supply[b.ticker]; if (s3) { b.extractionMarginPct = s3.extractionMarginPct == null ? null : s3.extractionMarginPct; b.supplyExpectedPct = s3.expectedNextMonthPct; } }
 
+// ---- cross-sectional percentile score (robust alternative to the unstable OLS) ----
+const pctRank = (vals) => { const idx = vals.map((v, i) => [v, i]).sort((a, b) => a[0] - b[0]); const out = new Array(vals.length); let i = 0; while (i < idx.length) { let j = i; while (j + 1 < idx.length && idx[j + 1][0] === idx[i][0]) j++; const avg = (i + j) / 2 / Math.max(1, idx.length - 1) * 100; for (let k = i; k <= j; k++) out[idx[k][1]] = avg; i = j + 1; } return out; };
+const supplyScoreMap = new Map();   // 'YYYY-MM|TICKER' -> 0..100 (higher = expected higher return)
+for (const m of rayMonths) {
+  const mk = monthKey(m);
+  const list = supplyRows.filter(r => r.month === m);
+  const parts = [
+    ['surplus', r => (r.surplus == null ? null : -r.surplus)],
+    ['growth', r => (r.growth == null ? null : -r.growth)],
+    ['ppu', r => (r.ppu == null ? null : -r.ppu)],
+    ['xmargin', r => (r.xmargin == null ? null : -r.xmargin)],
+  ];
+  const ranks = new Map();
+  for (const [, fn] of parts) {
+    const ok = list.filter(r => fn(r) != null && Number.isFinite(fn(r)));
+    if (ok.length < 8) continue;
+    const rr = pctRank(ok.map(fn));
+    ok.forEach((r, i) => { if (!ranks.has(r.t)) ranks.set(r.t, []); ranks.get(r.t).push(rr[i]); });
+  }
+  for (const [t, arr] of ranks) supplyScoreMap.set(mk + '|' + t, arr.reduce((a, b2) => a + b2, 0) / arr.length);
+}
+const scoreFor = (t, d) => { const day = new Date(d); const mk = day.getUTCFullYear() + '-' + String(day.getUTCMonth() + 1).padStart(2, '0'); return supplyScoreMap.has(mk + '|' + t) ? supplyScoreMap.get(mk + '|' + t) : null; };
+
+for (const b of board) { const arr2 = bySeries.get(b.ticker + '|' + b.cx); const last2 = arr2 && arr2[arr2.length - 1]; b.supplyScore = last2 ? scoreFor(b.ticker, last2.d) : null; b.comboScore = (b.supplyScore != null && last2 && last2.sma10) ? (+((( -(last2.c / last2.sma10 - 1)) * 100 + (b.supplyScore - 50))).toFixed(1)) : null; }
+console.log('supply scores built for', supplyScoreMap.size, 'month-ticker pairs');
 const supplyModelInfo = { fit3: { beta: fit3.beta, sigma: fit3.sigma, r2: fit3.r2, n: fit3.n }, fit4: { beta: fit4.beta, sigma: fit4.sigma, r2: fit4.r2, n: fit4.n }, ic: { surplus: mIC(r => r.surplus, r => r.ret), supplyGrowth: mIC(r => r.growth, r => r.ret), profitPerUnit: mIC(r => r.ppu, r => r.ret), extractionMargin: mIC(r => r.xmargin, r => r.ret), extractionMarginRaw: mIC(r => r.xmargin, r => r.ret, 'raw'), surplusRaw: mIC(r => r.surplus, r => r.ret, 'raw') } };
 globalThis.__supplyModelInfo = supplyModelInfo;
 // supply.json must be written AFTER the model info exists (it was written earlier in the supply block)
@@ -525,6 +517,61 @@ fs.writeFileSync(path.join(SITE, 'supply.json'), JSON.stringify({ generatedAt: n
   fit: supplyModelInfo.fit4, fit3: supplyModelInfo.fit3, ic: supplyModelInfo.ic,
   note: 'surplus = (产量 - 消耗) / max(产量, 消耗)；raw = 有行星丰度数据的可采掘材料；extractionMargin 单独作因子时 IC 最强（18/18 月为负），但 OLS 系数不稳，期望值仍用三因子模型',
   byTicker: supply }, null, 1));
+
+const dates = [...byDate.keys()].sort((a, b) => a - b);
+const methods = [];
+for (const h of [30, 90]) {
+  const target = h === 30 ? 'r30' : 'r90';
+  for (const [key, spec] of Object.entries(F)) {
+    const ics = [], byYear = {}; let top = 0, all = 0, nTop = 0, nAll = 0, xs = 0;
+    for (const d of dates) {
+      const usable = byDate.get(d).filter(r => r[target] != null);
+      if (usable.length < 60) continue;
+      const pairs = usable.map(r => [spec.fn(r), r]).filter(x => x[0] != null && Number.isFinite(x[0]));
+      if (pairs.length < 60) continue;
+      xs++;
+      const ic = corr(rankify(pairs.map(x => x[0])), rankify(pairs.map(x => x[1][target])));
+      ics.push(ic);
+      const y = new Date(d).toISOString().slice(0, 4);
+      (byYear[y] = byYear[y] || []).push(ic);
+      const sorted = pairs.slice().sort((a, b) => b[0] - a[0]);
+      const k = Math.max(5, Math.floor(sorted.length * 0.1));
+      for (const x of sorted.slice(0, k)) { top += x[1][target]; nTop++; }
+      for (const x of pairs) { all += x[1][target]; nAll++; }
+    }
+    if (!ics.length) continue;
+    methods.push({
+      key, label: spec.label, horizonDays: h, crossSections: xs,
+      meanIC: +(mean(ics) * 100).toFixed(2),
+      tStat: +(mean(ics) / (sd(ics) / Math.sqrt(ics.length))).toFixed(1),
+      icPositivePct: Math.round(ics.filter(x => x > 0).length / ics.length * 100),
+      topDecileReturnPct: +((top / nTop) * 100).toFixed(2),
+      universeReturnPct: +((all / nAll) * 100).toFixed(2),
+      spreadPct: +(((top / nTop) - (all / nAll)) * 100).toFixed(2),
+      byYear: Object.fromEntries(Object.entries(byYear).map(([y, v]) => [y, +(mean(v) * 100).toFixed(1)])),
+    });
+  }
+}
+
+// ---- 2d) rank-average combo test: does merging beat each signal on its own? ----
+const comboIc = {};
+for (const h of [30, 90]) {
+  const tgt = h === 30 ? 'r30' : 'r90';
+  const ics = { mr: [], ss: [], combo: [] };
+  for (const d of dates) {
+    const list = byDate.get(d).filter(r => r[tgt] != null && r.sma10 && scoreFor(r.t, r.d) != null);
+    if (list.length < 40) continue;
+    const rm = rankify(list.map(r => -(r.c / r.sma10 - 1)));
+    const rs = rankify(list.map(r => scoreFor(r.t, r.d)));
+    const rc = list.map((_, i) => (rm[i] + rs[i]) / 2);
+    const y = rankify(list.map(r => r[tgt]));
+    ics.mr.push(corr(rm, y)); ics.ss.push(corr(rs, y)); ics.combo.push(corr(rc, y));
+  }
+  const mean2 = (a) => a.reduce((x, y2) => x + y2, 0) / a.length;
+  comboIc['h' + h] = { meanRev: +(mean2(ics.mr) * 100).toFixed(1), supplyScore: +(mean2(ics.ss) * 100).toFixed(1), combo: +(mean2(ics.combo) * 100).toFixed(1), n: ics.mr.length };
+}
+console.log('combo IC (rank-average of mean-reversion and supply score):', JSON.stringify(comboIc));
+globalThis.__comboIc = comboIc;
 
 const z = (arr) => { const m = mean(arr), s = sd(arr) || 1; return (x) => (x - m) / s; };
 const zDemand = z(board.map(b => (b.recipeDownstream || 0) + (b.constructionDownstream || 0)));
