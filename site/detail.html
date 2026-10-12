@@ -56,6 +56,9 @@
   <div class="wrap"><canvas id="cv"></canvas><div class="tip" id="tip"></div></div>
   <div class="note" id="fcNote"></div>
 
+  <h2>月度供给（社区产能统计）</h2>
+  <div id="supplyBox"></div>
+
   <h2>跨所价差与运费</h2>
   <div id="freight"></div>
   <div class="note" id="fnote"></div>
@@ -74,7 +77,7 @@ const params = new URLSearchParams(location.search);
 const T = (params.get('t') || 'RAT').toUpperCase();
 let ZH = {};   // ticker -> Chinese name
 
-let DATA = null, BOARD = null, FORECAST = null, FREIGHT = null, FC = null, cxList = [], cx = params.get('cx'), view = null, hover = null;
+let DATA = null, BOARD = null, FORECAST = null, FREIGHT = null, SUPPLY = null, FC = null, cxList = [], cx = params.get('cx'), view = null, hover = null;
 const FUTURE_FRAC = 0.18;   // share of the plot width reserved for the model's forward path
 
 const cv = $('#cv'), ctx = cv.getContext('2d');
@@ -253,6 +256,7 @@ function breakdownHtml(row) {
   BOARD = await bres.json();
   ZH = await fetch('materials-zh.json').then(r => r.json()).then(j => j.byTicker || {}).catch(() => ({}));
   FREIGHT = await fetch('data/freight.json?v=' + ver).then(r => r.json()).catch(() => null);
+  SUPPLY = await fetch('data/supply.json?v=' + ver).then(r => r.json()).catch(() => null);
   const fcRes = await fetch('data/forecast.json?v=' + ver).then(r => r.json()).catch(() => null);
   FORECAST = fcRes;
   FC = (fcRes && fcRes.bySeries && fcRes.bySeries[T + '|' + cx]) || null;
@@ -273,6 +277,7 @@ function breakdownHtml(row) {
   const row = BOARD.rows.find(r => r.ticker === T && r.cx === cx);
   $('#breakdown').innerHTML = breakdownHtml(row);
   renderFreight();
+  renderSupply();
   $('#bnote').textContent = '人工成本 = Σ(该建筑各层级工人数/100 × 该层级「每 100 人每日消耗品篮子」) × 生产时长 ÷ 产出数量。先驱/定居者篮子已与官方手册核对；技术员/工程师/科学家篮子取自游戏自带的 PAC 人口配方（÷10 折算成日）；不含建筑折旧与税费。';
   if (FORECAST && FORECAST.fit30) {
     $('#fcNote').innerHTML = '虚线 = 拟合模型给出的<b>价格路径预期</b>（r = a + b1×离 10 日均线距离 + b2×总毛利率 + b3×低波动），阴影 = ±1σ 残差区间。样本内拟合：30 天 R² ' + (FORECAST.fit30.r2 * 100).toFixed(1) + '%、σ ' + (FORECAST.fit30.sigma * 100).toFixed(1) + '%；90 天 R² ' + (FORECAST.fit90.r2 * 100).toFixed(1) + '%、σ ' + (FORECAST.fit90.sigma * 100).toFixed(1) + '%。不是投资建议，残差很大。';
@@ -282,6 +287,19 @@ function breakdownHtml(row) {
   resize();
 })();
 
+function renderSupply() {
+  const s = SUPPLY && SUPPLY.byTicker && SUPPLY.byTicker[T];
+  const box = document.getElementById('supplyBox');
+  if (!box) return;
+  if (!s) { box.innerHTML = '<div class="note">该商品在社区月度产能统计里没有数据。</div>'; return; }
+  box.innerHTML = `<table><thead><tr><th>月份</th><th>产量</th><th>消耗</th><th>过剩%</th><th>供给增速</th><th>单位利润</th><th>月产值</th><th>模型预期(次月)</th></tr></thead><tbody><tr>
+    <td>${s.month}</td><td>${int(Math.round(s.amount))}</td><td>${int(Math.round(s.consumed))}</td>
+    <td class="${signCls(-(s.surplus || 0))}">${s.surplus == null ? '—' : fmt(s.surplus, 0) + '%'}</td>
+    <td class="${signCls(-(s.supplyGrowthPct || 0))}">${s.supplyGrowthPct == null ? '—' : fmt(s.supplyGrowthPct, 0) + '%'}</td>
+    <td>${s.profitPerUnit == null ? '—' : fmt(s.profitPerUnit, 1)}</td><td class="dim">${int(Math.round((s.volume || 0) / 1e6))}M</td>
+    <td class="${signCls(s.expectedNextMonthPct)}"><b>${s.expectedNextMonthPct == null ? '—' : (s.expectedNextMonthPct > 0 ? '+' : '') + fmt(s.expectedNextMonthPct, 1) + '%'}</b></td></tr></tbody></table>
+    <div class="note">数据：prun.raylu.net 月度产能统计${s.raw ? ' · <b>该商品属于采掘类</b>（无上游配方成本）' : ''}。模型：次月收益 = a + b1×过剩 + b2×供给增速 + b3×单位利润（月度面板，样本内 R² ${SUPPLY.fit ? (SUPPLY.fit.r2 * 100).toFixed(1) : '—'}%）。</div>`;
+}
 function renderFreight() {
   const box = $('#freight'), note = $('#fnote');
   const f = FREIGHT && FREIGHT.byTicker && FREIGHT.byTicker[T];
@@ -303,6 +321,8 @@ function renderCards() {
     ['毛利（扣人工后）', (row.marginPct == null ? '—' : row.marginPct + '%')], ['自身历史分位', row.marginPctile == null ? '—' : row.marginPctile + '%'],
     ['30 天成交额', int(row.tradedMoney30d)], ['距 10 日均线', row.below10dMeanPct == null ? '—' : row.below10dMeanPct + '%'],
     ['模型预期 30 天', FC ? ((FC.expected30Pct > 0 ? '+' : '') + FC.expected30Pct + '% ±' + FC.band30Pct + '%') : '—'],
+    ['供给过剩(月)', (SUPPLY && SUPPLY.byTicker && SUPPLY.byTicker[T] && SUPPLY.byTicker[T].surplus != null) ? SUPPLY.byTicker[T].surplus + '%' : '—'],
+    ['供给面预期(次月)', (SUPPLY && SUPPLY.byTicker && SUPPLY.byTicker[T] && SUPPLY.byTicker[T].expectedNextMonthPct != null) ? ((SUPPLY.byTicker[T].expectedNextMonthPct > 0 ? '+' : '') + SUPPLY.byTicker[T].expectedNextMonthPct + '%') : '—'],
     ['模型预期 90 天', FC ? ((FC.expected90Pct > 0 ? '+' : '') + FC.expected90Pct + '% ±' + FC.band90Pct + '%') : '—'],
   ].map(([k, v]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
 }
