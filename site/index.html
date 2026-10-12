@@ -80,7 +80,7 @@
       <span class="sub" id="boardCount"></span>
     </div>
     <div class="wrap"><table id="boardTable"><thead><tr>
-      <th>商品</th><th>交易所</th><th>日期</th><th>价格</th><th>料成本</th><th>人工</th><th>毛利(扣人工)</th><th>自身历史分位</th>
+      <th>商品</th><th>交易所</th><th>日期</th><th>价格</th><th>料成本</th><th>人工</th><th>毛利(扣人工)</th><th>年通胀</th><th>实际毛利</th><th>自身历史分位</th>
       <th>配方下游</th><th>建造下游</th><th>可产配方</th><th>粘性</th><th>打分</th>
     </tr></thead><tbody></tbody></table></div>
     <div class="note">毛价差 = (价格 − 原料篮子成本) / 价格，<b>不含</b>人工与折旧；料成本用同交易所的最优配方推算。<b>粘性</b> = 需求广度(配方下游+建造下游) 减去 供给弹性(可产配方数)，标准化后取值。</div>
@@ -91,10 +91,11 @@ const fmt = (x, d = 2) => (x == null || Number.isNaN(x)) ? '—' : Number(x).toF
 const num = (x) => (x == null || x === '') ? '—' : Number(x).toLocaleString('en-US');
 const signCls = (x) => x == null ? '' : (x > 0 ? 'pos' : (x < 0 ? 'neg' : ''));
 (async () => {
-  const [meta, fit, board] = await Promise.all([
+  const [meta, fit, board, inflation] = await Promise.all([
     fetch('data/meta.json').then(r => r.json()),
     fetch('data/fit.json').then(r => r.json()),
     fetch('data/board.json').then(r => r.json()),
+    fetch('data/inflation.json').then(r => r.json()).catch(() => ({ byCurrency: {} })),
   ]);
   const h = meta.history || {};
   document.getElementById('headline').innerHTML =
@@ -108,6 +109,17 @@ const signCls = (x) => x == null ? '' : (x > 0 ? 'pos' : (x < 0 ? 'neg' : ''));
     ['数据拉取时间', h.pulledAt ? new Date(h.pulledAt).toLocaleString('zh-CN') : '—'],
   ].map(([k, v]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
 
+  const infl = inflation.byCurrency || {};
+  const inflRows = Object.entries(infl).map(([code, v]) => (`<div class="card"><div class="k">${code} 实测通胀（近 365 天）</div><div class="v">${v.annualInflationPct == null ? '—' : v.annualInflationPct + '%'}</div><div class="dim" style="font-size:11.5px">${v.exchange} · 样本 ${v.tradedTickers} 个商品</div></div>`)).join('');
+  const inflBox = document.createElement('div');
+  inflBox.className = 'cards';
+  inflBox.style.marginTop = '12px';
+  inflBox.innerHTML = inflRows;
+  document.querySelector('#cards').parentElement.appendChild(inflBox);
+  const inflNote = document.createElement('div');
+  inflNote.className = 'note';
+  inflNote.innerHTML = '币种通胀 = 该交易所全部有成交商品的<b>中位数</b>价格涨幅（近 365 天），直接从价格实测，不用「印钞机」代理。看毛利时记得扣掉它：名义毛利 25% 在年通胀 22% 的货币里，实际只赚约 3%。';
+  document.querySelector('#cards').parentElement.appendChild(inflNote);
   document.querySelector('#fitTable tbody').innerHTML = fit.methods.map(m => `
     <tr>
       <td>${m.label}</td><td>${m.horizonDays}天</td>
@@ -133,6 +145,8 @@ const signCls = (x) => x == null ? '' : (x > 0 ? 'pos' : (x < 0 ? 'neg' : ''));
         <td>${num(Math.round(r.matCost))}</td>
         <td>${num(Math.round(r.labourCost))}</td>
         <td class="${signCls(r.marginPct)}">${fmt(r.marginPct, 1)}%</td>
+        <td class="dim">${r.inflationAnnualPct == null ? '—' : r.inflationAnnualPct + '%'}</td>
+        <td class="${signCls(r.marginPct != null && r.inflationAnnualPct != null ? r.marginPct - r.inflationAnnualPct : null)}">${r.marginPct == null || r.inflationAnnualPct == null ? '—' : (r.marginPct - r.inflationAnnualPct).toFixed(1) + '%'}</td>
         <td>${r.marginPctile == null ? '—' : r.marginPctile + '%'}</td>
         <td>${r.recipeDownstream}</td>
         <td>${r.constructionDownstream}</td>
