@@ -66,6 +66,13 @@
   </section>
 
   <section>
+    <h2>原料（采掘类）供给与预测<span class="dim" id="rawWhen"></span></h2>
+    <div class="note" style="margin-bottom:8px">原料由采掘建筑（RIG/EXT/COL）产出，没有上游配方成本；这里用社区统计站 <a href="https://prun.raylu.net/stats/" style="color:var(--acc)">prun.raylu.net</a> 的<b>月度产量/消耗量</b>来刻画供给，并用「产量过剩 + 供给增速 + 单位利润」的月度模型预测下个月方向。<b>供给过剩 → 价格下行</b>（全样本 IC −17.8%，原料样本 −23.4%）。</div>
+    <input type="search" id="rawFilter" placeholder="过滤原料（代码/中文名）" style="margin-bottom:8px">
+    <div class="wrap"><table id="rawTable"><thead><tr><th>原料</th><th>月产量</th><th>月消耗</th><th>过剩%</th><th>供给增速</th><th>单位利润</th><th>月产值</th><th>模型预期(次月)</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section>
     <h2>游戏官方通胀指数（INFL）<span class="dim" id="inflWhen"></span></h2>
     <div class="cards" id="inflCards"></div>
     <div class="wrap" style="margin-top:10px"><table id="inflTable"><thead><tr><th>币种</th><th>口径</th><th>最新 level</th><th>最新一期</th><th>起点</th><th>点数</th></tr></thead><tbody></tbody></table></div>
@@ -87,7 +94,7 @@
       <span class="sub" id="boardCount"></span>
     </div>
     <div class="wrap"><table id="boardTable"><thead><tr>
-      <th>商品（代码 / 英文名 / 中文名）</th><th>交易所</th><th>日期</th><th>价格</th><th>料成本</th><th>人工</th><th>折旧</th><th>毛利(扣全部成本)</th><th>年通胀</th><th>实际毛利</th><th>模型预期30天</th><th>跨所价差(对最低所)</th><th>自身历史分位</th>
+      <th>商品（代码 / 英文名 / 中文名）</th><th>交易所</th><th>日期</th><th>价格</th><th>料成本</th><th>人工</th><th>折旧</th><th>毛利(扣全部成本)</th><th>年通胀</th><th>实际毛利</th><th>模型预期30天</th><th>跨所价差(对最低所)</th><th>供给面预期(月)</th><th>自身历史分位</th>
       <th>配方下游</th><th>建造下游</th><th>可产配方</th><th>粘性</th><th>打分</th>
     </tr></thead><tbody></tbody></table></div>
     <div class="note">毛价差 = (价格 − 原料篮子成本) / 价格，<b>不含</b>人工与折旧；料成本用同交易所的最优配方推算。<b>粘性</b> = 需求广度(配方下游+建造下游) 减去 供给弹性(可产配方数)，标准化后取值。</div>
@@ -132,6 +139,29 @@ const signCls = (x) => x == null ? '' : (x > 0 ? 'pos' : (x < 0 ? 'neg' : ''));
   inflNote.className = 'note';
   inflNote.innerHTML = '币种通胀 = 该交易所全部有成交商品的<b>中位数</b>价格涨幅（近 365 天），直接从价格实测，不用「印钞机」代理。看毛利时记得扣掉它：名义毛利 25% 在年通胀 22% 的货币里，实际只赚约 3%。';
   document.querySelector('#cards').parentElement.appendChild(inflNote);
+  // monthly supply/demand panel (raylu production flows)
+  const supply = await fetch('data/supply.json?v=' + ver).then(r => r.json()).catch(() => null);
+  if (supply && supply.byTicker) {
+    document.getElementById('rawWhen').textContent = supply.month ? ' · 数据月份 ' + supply.month + (supply.fit ? ' · 模型 R² ' + (supply.fit.r2 * 100).toFixed(1) + '%' : '') : '';
+    const raw = Object.entries(supply.byTicker).filter(([, v]) => v.raw).sort((a, b) => (b[1].volume || 0) - (a[1].volume || 0));
+    const rbody = document.querySelector('#rawTable tbody');
+    const paint = (q2 = '') => {
+      const term2 = q2.trim().toLowerCase();
+      const list = raw.filter(([t, v]) => !term2 || (t + ' ' + (v.name || '') + ' ' + (ZH[t] || '')).toLowerCase().includes(term2));
+      rbody.innerHTML = list.slice(0, 60).map(([t, v]) => `<tr>
+        <td><a href="detail.html?t=${t}&cx=NC1" style="color:inherit"><b>${t}</b></a> <span class="dim">${(ZH[t] || v.name || '')}</span></td>
+        <td>${num(Math.round(v.amount))}</td><td>${num(Math.round(v.consumed))}</td>
+        <td class="${signCls(-(v.surplus || 0))}">${v.surplus == null ? '—' : fmt(v.surplus, 0) + '%'}</td>
+        <td class="${signCls(-(v.supplyGrowthPct || 0))}">${v.supplyGrowthPct == null ? '—' : fmt(v.supplyGrowthPct, 0) + '%'}</td>
+        <td>${v.profitPerUnit == null ? '—' : fmt(v.profitPerUnit, 1)}</td>
+        <td class="dim">${num(Math.round((v.volume || 0) / 1e6))}M</td>
+        <td class="${signCls(v.expectedNextMonthPct)}"><b>${v.expectedNextMonthPct == null ? '—' : (v.expectedNextMonthPct > 0 ? '+' : '') + fmt(v.expectedNextMonthPct, 1) + '%'}</b></td></tr>`).join('');
+    };
+    paint();
+    const rf = document.getElementById('rawFilter');
+    if (rf) rf.addEventListener('input', (e) => paint(e.target.value));
+  }
+
   // in-game official INFL index (captured read-only, stored in the repo)
   try {
     const ih = await fetch('infl/infl-history.json?v=' + ver).then(r => r.json());
@@ -195,6 +225,7 @@ const signCls = (x) => x == null ? '' : (x > 0 ? 'pos' : (x < 0 ? 'neg' : ''));
         <td class="dim">${r.inflationAnnualPct == null ? '—' : r.inflationAnnualPct + '%'}</td>
         <td class="${signCls(r.marginPct != null && r.inflationAnnualPct != null ? r.marginPct - r.inflationAnnualPct : null)}">${r.marginPct == null || r.inflationAnnualPct == null ? '—' : (r.marginPct - r.inflationAnnualPct).toFixed(1) + '%'}</td>
         <td class="${signCls(r.expected30Pct)}">${r.expected30Pct == null ? '—' : fmt(r.expected30Pct, 1) + '%'}</td>
+        <td class="${signCls(r.supplyExpectedPct)}">${r.supplyExpectedPct == null ? '—' : ((r.supplyExpectedPct > 0 ? '+' : '') + fmt(r.supplyExpectedPct, 1) + '%')}${r.supplySurplusPct != null ? ' <span class="dim">(过剩 ' + fmt(r.supplySurplusPct, 0) + '%)</span>' : ''}</td>
         <td class="${signCls(r.vsCheapest)}">${r.vsCheapest == null ? '—' : (r.vsCheapest > 0 ? '+' : '') + fmt(r.vsCheapestPct, 1) + '%' + (r.breakEvenUnits ? ' · ≥' + num(r.breakEvenUnits) + '件才值一趟' : '')}</td>
         <td>${r.marginPctile == null ? '—' : r.marginPctile + '%'}</td>
         <td>${r.recipeDownstream}</td>
