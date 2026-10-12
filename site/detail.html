@@ -111,7 +111,8 @@ function draw() {
     ctx.fillText(fmt(p, p < 10 ? 2 : 0), w - padR + 5, y + 4);
   }
   // volume bars
-  const bw = Math.max(1, (w - padL - padR) / slice.length * 0.7);
+  const bw = Math.max(1, Math.min(13, (w - padL - padR) / Math.max(1, slice.length) * 0.72));
+  ctx.fillStyle = '#5b6473'; ctx.fillText('成交额', padL + 2, padT + chartH + 18);
   slice.forEach((k, i) => {
     ctx.fillStyle = k[4] >= k[1] ? '#26a69a55' : '#ef535055';
     ctx.fillRect(X(i) - bw / 2, VY(k[5]), bw, padT + chartH + 6 + volH - VY(k[5]));
@@ -131,15 +132,22 @@ function draw() {
   ctx.stroke();
   // x labels
   ctx.fillStyle = '#98a2b3';
-  const step = Math.max(1, Math.floor(slice.length / 6));
+  const step = Math.max(1, Math.round(slice.length / (slice.length <= 40 ? Math.min(slice.length, 8) : 7)));
   for (let i = 0; i < slice.length; i += step) {
     const d = new Date(slice[i][0]).toISOString().slice(0, 10);
     ctx.fillText(d, Math.min(X(i) - 18, w - padR - 60), h - 8);
   }
+  // last close reference
+  const lastC = slice[slice.length - 1][4];
+  ctx.save(); ctx.setLineDash([4, 4]); ctx.strokeStyle = '#5b6473';
+  ctx.beginPath(); ctx.moveTo(padL, Y(lastC)); ctx.lineTo(w - padR, Y(lastC)); ctx.stroke(); ctx.restore();
+  ctx.fillStyle = '#c9d1d9'; ctx.fillText(fmt(lastC, lastC < 10 ? 2 : 0), w - padR + 5, Y(lastC) - 3);
   // crosshair + tooltip
   if (hover != null && hover >= i0 && hover <= i1) {
     const i = hover - i0, k = slice[i];
-    ctx.strokeStyle = '#5b6473'; ctx.beginPath(); ctx.moveTo(X(i), padT); ctx.lineTo(X(i), padT + chartH); ctx.stroke();
+    ctx.strokeStyle = '#5b6473'; ctx.beginPath(); ctx.moveTo(X(i), padT); ctx.lineTo(X(i), padT + chartH + 6 + volH); ctx.stroke();
+    ctx.strokeStyle = '#39414f'; ctx.beginPath(); ctx.moveTo(padL, Y(k[4])); ctx.lineTo(w - padR, Y(k[4])); ctx.stroke();
+    ctx.fillStyle = '#c9d1d9'; ctx.fillText(fmt(k[4], k[4] < 10 ? 2 : 0), w - padR + 5, Y(k[4]) - 3);
     const tip = $('#tip');
     const chg = i > 0 ? (k[4] / slice[i - 1][4] - 1) * 100 : 0;
     tip.innerHTML = `${new Date(k[0]).toISOString().slice(0, 10)}<br>开 ${fmt(k[1])} 高 ${fmt(k[2])}<br>低 ${fmt(k[3])} 收 <b>${fmt(k[4])}</b><br>涨跌 <span class="${chg >= 0 ? 'pos' : 'neg'}">${chg.toFixed(2)}%</span><br>成交额 ${int(k[5])} · 量 ${int(k[6])}`;
@@ -168,7 +176,7 @@ cv.addEventListener('wheel', (e) => {
   const r = rows(); if (!r.length) return;
   const n = view.i1 - view.i0 + 1;
   const factor = e.deltaY > 0 ? 1.18 : 1 / 1.18;
-  const nn = clamp(Math.round(n * factor), 20, r.length);
+  const nn = clamp(Math.round(n * factor), 10, r.length);
   const anchor = clamp(view.i0 + Math.round((e.clientX / cv.clientWidth) * n), 0, r.length - 1);
   view.i0 = clamp(anchor - Math.round((anchor - view.i0) / n * nn), 0, r.length - nn);
   view.i1 = view.i0 + nn - 1;
