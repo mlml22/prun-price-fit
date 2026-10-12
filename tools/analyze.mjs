@@ -240,7 +240,11 @@ let RECIPES = [], BUILDINGS = [];
 try { RECIPES = JSON.parse(fs.readFileSync(path.join(CACHE, 'recipes.json'), 'utf8')); } catch { /* optional */ }
 try { BUILDINGS = JSON.parse(fs.readFileSync(path.join(CACHE, 'buildings.json'), 'utf8')); } catch { /* optional */ }
 RAW_SET = rawSet(RECIPES);
-try { PLANETS = JSON.parse(fs.readFileSync(path.join(CACHE, 'planets.json'), 'utf8')); } catch { /* optional */ }
+try { PLANETS = JSON.parse(fs.readFileSync(path.join(CACHE, 'planets.json'), 'utf8')); }
+catch {
+  const r = await fetch('https://api.prunplanner.org/data/planets/', { headers: { 'User-Agent': 'prun-price-fit/1.0' } });
+  if (r.status === 200) { PLANETS = await r.json(); fs.writeFileSync(path.join(CACHE, 'planets.json'), JSON.stringify(PLANETS)); }
+}
 const buildingOfWork = new Map(BUILDINGS.map(b => [b.building_ticker, b]));
 const recipesByOutput = new Map();
 for (const r of RECIPES) {
