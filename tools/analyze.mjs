@@ -14,17 +14,23 @@ const HIST = path.join(SITE, 'hist');
 fs.mkdirSync(HIST, { recursive: true });
 
 const feats = JSON.parse(fs.readFileSync(path.join(DATA, 'features.json'), 'utf8'));
+let CURRENCY_INFLATION = null;
 const manifest = JSON.parse(fs.readFileSync(path.join(DATA, 'cxpc-manifest.json'), 'utf8'));
 
 // ---- 1) chart payload: raw OHLCV per ticker (gzipped, decompressed in the browser) ----
 {
   const byTicker = new Map();
+  const panelByCx = new Map();
   for (const line of zlib.gunzipSync(fs.readFileSync(path.join(DATA, 'cxpc-daily.jsonl.gz'))).toString('utf8').split('\n')) {
     if (!line) continue;
     // upstream row order is [ticker, cx, day, OPEN, CLOSE, HIGH, LOW, volume, traded]
     const [t, cx, d, o, c, h, l, v, n] = JSON.parse(line);
     if (!(Number(c) > 0)) continue;
     if (Number(h) < Number(l)) throw new Error('OHLC order sanity check failed for ' + t + ' ' + cx);
+    if (!panelByCx.has(cx)) panelByCx.set(cx, new Map());
+    const byT = panelByCx.get(cx);
+    if (!byT.has(t)) byT.set(t, new Map());
+    byT.get(t).set(d, Number(c));
     if (!byTicker.has(t)) byTicker.set(t, { t, series: {} });
     const rec = byTicker.get(t);
     (rec.series[cx] = rec.series[cx] || []).push([d, Number(o) || Number(c), Number(h) || Number(c), Number(l) || Number(c), Number(c), Number(v) || 0, Number(n) || 0]);
@@ -36,6 +42,53 @@ const manifest = JSON.parse(fs.readFileSync(path.join(DATA, 'cxpc-manifest.json'
     files++;
   }
   console.log('hist files:', files);
+
+  // observed currency inflation: median log price change over the trailing 365 days, plus a monthly history
+  const CURRENCY = { AI1: 'AIC', CI1: 'CIS', IC1: 'ICA', NC1: 'NCC' };
+  const med = (a) => { const x = a.slice().sort((p, q) => p - q); return x.length ? x[Math.floor(x.length / 2)] : null; };
+  let lastDay = 0;
+  for (const m of panelByCx.values()) for (const mm of m.values()) for (const d of mm.keys()) if (d > lastDay) lastDay = d;
+  const yearAgo = lastDay - 365 * 86400000;
+  CURRENCY_INFLATION = {};
+  for (const [cx, tickers] of panelByCx) {
+    const code = CURRENCY[cx] || cx;
+    const changes = [];
+    for (const [, m] of tickers) {
+      const ds = [...m.keys()].sort((a, b) => a - b);
+      if (ds.length < 120) continue;
+      let past = null;
+      for (const d of ds) { if (d <= yearAgo) past = d; else break; }
+      if (past == null) continue;
+      const p0 = m.get(past), p1 = m.get(ds[ds.length - 1]);
+      if (p0 > 0 && p1 > 0) changes.push(Math.log(p1 / p0));
+    }
+    const annual = med(changes);
+    // monthly history of the same measure (month end, trailing 12 months), for a sparkline
+    const monthly = [];
+    const monthEnds = [];
+    for (const d of [...new Set([...[...tickers.values()].flatMap(mm => [...mm.keys()])])].sort((a, b) => a - b)) {
+      if (monthEnds.length && new Date(monthEnds[monthEnds.length - 1]).getUTCMonth() === new Date(d).getUTCMonth()) monthEnds[monthEnds.length - 1] = d;
+      else monthEnds.push(d);
+    }
+    for (const me of monthEnds.slice(-24)) {
+      const from = me - 365 * 86400000;
+      const ch = [];
+      for (const [, m] of tickers) {
+        const ds = [...m.keys()].filter(x => x <= me).sort((a, b) => a - b);
+        if (ds.length < 120) continue;
+        let past = null;
+        for (const d of ds) { if (d <= from) past = d; else break; }
+        if (past == null) continue;
+        const p0 = m.get(past), p1 = m.get(ds[ds.length - 1]);
+        if (p0 > 0 && p1 > 0) ch.push(Math.log(p1 / p0));
+      }
+      const v = med(ch);
+      if (v != null) monthly.push([new Date(me).toISOString().slice(0, 7), +(v * 100).toFixed(1)]);
+    }
+    CURRENCY_INFLATION[code] = { exchange: cx, annualInflationPct: annual == null ? null : +(annual * 100).toFixed(1), tradedTickers: changes.length, monthly };
+  }
+  console.log('currency inflation (trailing 365d, median):', JSON.stringify(Object.fromEntries(Object.entries(CURRENCY_INFLATION).map(([k, v]) => [k, v.annualInflationPct]))));
+  fs.writeFileSync(path.join(SITE, 'inflation.json'), JSON.stringify({ generatedAt: new Date().toISOString(), note: 'median log price change over the trailing 365 days, per currency; measured from CX prices, not from a money-printing proxy', byCurrency: CURRENCY_INFLATION }, null, 1));
 }
 
 // ---- 2) dataset -> features/IC ----
@@ -177,6 +230,8 @@ for (const [key, arr] of bySeries) {
     popConsumable: f.popConsumable, fuel: f.fuel, distToTerminal: f.distToTerminal,
     below10dMeanPct: last.sma10 ? +((last.c / last.sma10 - 1) * 100).toFixed(1) : null,
     days: arr.length, first: new Date(arr[0].d).toISOString().slice(0, 10),
+    currency: ({ AI1: 'AIC', CI1: 'CIS', IC1: 'ICA', NC1: 'NCC' })[cx] || cx,
+    inflationAnnualPct: null,
     costBreakdown: breakdown ? { building: breakdown.building, timeMs: breakdown.timeMs, outAmount: breakdown.outAmount, matItems: breakdown.matItems, matCost: breakdown.matCost, labourCost: breakdown.labourCost, labourDetail: breakdown.labourDetail, totalCost: breakdown.totalCost } : null,
   });
 }
@@ -187,6 +242,7 @@ for (const b of board) {
   b.stickiness = +((zDemand((b.recipeDownstream || 0) + (b.constructionDownstream || 0))) - zSupply(b.producerRecipes || 0)).toFixed(2);
   b.heuristicScore = +(((b.marginPctile ?? 50) / 25) + b.stickiness).toFixed(2);
 }
+for (const b of board) { const inf = CURRENCY_INFLATION && CURRENCY_INFLATION[b.currency]; if (inf) b.inflationAnnualPct = inf.annualInflationPct; }
 board.sort((a, b) => b.heuristicScore - a.heuristicScore);
 
 const withLab = board.filter(b => b.labourCost != null);
