@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PrUn 价格拟合看板</title>
+<style>
+  :root { --bg:#0f1115; --card:#171a21; --line:#262b36; --fg:#e6e9ef; --dim:#98a2b3; --pos:#4ade80; --neg:#f87171; --acc:#60a5fa; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Microsoft YaHei",sans-serif; }
+  header { padding:20px 18px 12px; border-bottom:1px solid var(--line); }
+  h1 { margin:0 0 6px; font-size:19px; }
+  .sub { color:var(--dim); font-size:12.5px; }
+  main { padding:16px 18px 60px; max-width:1400px; margin:0 auto; }
+  section { margin:22px 0 0; }
+  h2 { font-size:15px; margin:0 0 10px; padding-bottom:6px; border-bottom:1px solid var(--line); }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .card .k { color:var(--dim); font-size:12px; }
+  .card .v { font-size:18px; font-weight:600; margin-top:2px; }
+  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  th,td { padding:7px 9px; text-align:right; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th:first-child, td:first-child { text-align:left; }
+  thead th { background:#1d2129; color:var(--dim); font-weight:600; font-size:12.5px; position:sticky; top:0; }
+  tbody tr:hover { background:#1c2029; }
+  tbody tr:last-child td { border-bottom:none; }
+  .pos { color:var(--pos); } .neg { color:var(--neg); } .dim { color:var(--dim); }
+  .pill { display:inline-block; padding:1px 6px; border-radius:99px; background:#232936; color:var(--dim); font-size:11.5px; margin-left:4px; }
+  .wrap { max-height:70vh; overflow:auto; border-radius:10px; }
+  input[type=search] { background:var(--card); border:1px solid var(--line); color:var(--fg); padding:7px 10px; border-radius:8px; width:230px; }
+  .note { color:var(--dim); font-size:12.5px; margin-top:8px; }
+  code { background:#20242e; padding:1px 5px; border-radius:4px; font-size:12px; }
+  .warn { border-left:3px solid #f59e0b; padding:8px 12px; background:#1d1a12; border-radius:6px; color:#f0d9a8; font-size:12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PrUn 价格拟合看板</h1>
+  <div class="sub" id="headline">加载中…</div>
+</header>
+<main>
+  <section>
+    <div class="cards" id="cards"></div>
+    <div class="warn" style="margin-top:12px">这是研究工具，不是投资建议。目标变量是<b>价格</b>（30/90 天远期收益），特征来自原料成本锚 + 生产链结构 + 市场结构。所有数字都可以从公开接口复现。</div>
+  </section>
+
+  <section>
+    <h2>因子有效性（横截面 Spearman IC，滚动样本，含每年分解）</h2>
+    <div class="wrap"><table id="fitTable"><thead><tr>
+      <th>因子</th><th>期限</th><th>平均 IC</th><th>t</th><th>IC&gt;0</th><th>前 10% 收益</th><th>全市场</th><th>差</th><th>逐年</th>
+    </tr></thead><tbody></tbody></table></div>
+    <div class="note">IC &lt; 0 表示「该因子越大，未来价格越<b>低</b>」。例：毛价差率越高 → 未来 30 天价格越低（生产被吸引进来，供给把利润抹平）。t 值受重叠窗口影响，偏大。</div>
+  </section>
+
+  <section>
+    <h2>今日清单（按启发式打分排序，<span class="dim">未经验证，仅作研究起点</span>）</h2>
+    <div style="display:flex; gap:10px; align-items:center; margin-bottom:8px; flex-wrap:wrap">
+      <input type="search" id="filter" placeholder="过滤 ticker / 类别…">
+      <span class="sub" id="boardCount"></span>
+    </div>
+    <div class="wrap"><table id="boardTable"><thead><tr>
+      <th>商品</th><th>交易所</th><th>日期</th><th>价格</th><th>料成本</th><th>毛价差</th><th>自身历史分位</th>
+      <th>配方下游</th><th>建造下游</th><th>可产配方</th><th>粘性</th><th>打分</th>
+    </tr></thead><tbody></tbody></table></div>
+    <div class="note">毛价差 = (价格 − 原料篮子成本) / 价格，<b>不含</b>人工与折旧；料成本用同交易所的最优配方推算。<b>粘性</b> = 需求广度(配方下游+建造下游) 减去 供给弹性(可产配方数)，标准化后取值。</div>
+  </section>
+</main>
+<script>
+const fmt = (x, d = 2) => (x == null || Number.isNaN(x)) ? '—' : Number(x).toFixed(d);
+const num = (x) => (x == null || x === '') ? '—' : Number(x).toLocaleString('en-US');
+const signCls = (x) => x == null ? '' : (x > 0 ? 'pos' : (x < 0 ? 'neg' : ''));
+(async () => {
+  const [meta, fit, board] = await Promise.all([
+    fetch('data/meta.json').then(r => r.json()),
+    fetch('data/fit.json').then(r => r.json()),
+    fetch('data/board.json').then(r => r.json()),
+  ]);
+  const h = meta.history || {};
+  document.getElementById('headline').innerHTML =
+    `生成于 ${new Date(meta.generatedAt).toLocaleString('zh-CN')} · 历史 ${num(h.rows)} 行 / ${num(h.series)} 条序列 · ${h.firstDate} → ${h.lastDate} · 上游：PRUNplanner（FIO 导入）`;
+  document.getElementById('cards').innerHTML = [
+    ['历史跨度', `${h.firstDate} → ${h.lastDate}`],
+    ['日线行数', num(h.rows)],
+    ['商品×交易所', num(h.series)],
+    ['料成本覆盖', meta.costAnchorCoveragePct + '%'],
+    ['今日清单条数', num(meta.boardSize)],
+    ['数据拉取时间', h.pulledAt ? new Date(h.pulledAt).toLocaleString('zh-CN') : '—'],
+  ].map(([k, v]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+
+  document.querySelector('#fitTable tbody').innerHTML = fit.methods.map(m => `
+    <tr>
+      <td>${m.label}</td><td>${m.horizonDays}天</td>
+      <td class="${signCls(m.meanIC)}">${fmt(m.meanIC)}%</td>
+      <td>${fmt(m.tStat, 1)}</td>
+      <td>${m.icPositivePct}%</td>
+      <td class="${signCls(m.topDecileReturnPct)}">${fmt(m.topDecileReturnPct)}%</td>
+      <td>${fmt(m.universeReturnPct)}%</td>
+      <td class="${signCls(m.spreadPct)}">${fmt(m.spreadPct)}%</td>
+      <td class="dim">${Object.entries(m.byYear || {}).map(([y, v]) => y + ':' + v).join(' ')}</td>
+    </tr>`).join('');
+
+  const body = document.querySelector('#boardTable tbody');
+  const render = (q = '') => {
+    const rows = board.rows.filter(r => !q || (r.ticker + ' ' + r.name + ' ' + r.category).toLowerCase().includes(q.toLowerCase()));
+    document.getElementById('boardCount').textContent = `显示 ${rows.length} / ${board.rows.length}`;
+    body.innerHTML = rows.slice(0, 200).map(r => `
+      <tr>
+        <td><b>${r.ticker}</b> <span class="dim">${r.name || ''}</span>${r.popConsumable ? '<span class="pill">人口消耗</span>' : ''}${r.fuel ? '<span class="pill">燃料</span>' : ''}</td>
+        <td>${r.cx}</td>
+        <td class="dim">${r.day}${r.daysAgo > 1 ? ` (+${r.daysAgo}d)` : ''}</td>
+        <td>${num(r.price)}</td>
+        <td>${num(Math.round(r.cost))}</td>
+        <td class="${signCls(r.marginPct)}">${fmt(r.marginPct, 1)}%</td>
+        <td>${r.marginPctile == null ? '—' : r.marginPctile + '%'}</td>
+        <td>${r.recipeDownstream}</td>
+        <td>${r.constructionDownstream}</td>
+        <td>${r.producerRecipes}</td>
+        <td class="${signCls(r.stickiness)}">${fmt(r.stickiness)}</td>
+        <td><b>${fmt(r.heuristicScore)}</b></td>
+      </tr>`).join('');
+  };
+  render();
+  document.getElementById('filter').addEventListener('input', (e) => render(e.target.value));
+})();
+</script>
+</body>
+</html>
