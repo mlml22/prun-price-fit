@@ -1,7 +1,5 @@
-// build-dataset.mjs - assemble the modelling table: daily price history + game structure.
-// Inputs : data/cxpc-daily.jsonl.gz , game structure cached in cache/
-// Output : data/dataset.jsonl.gz , data/features.json
-// Row    : [ticker, cx, dayEpochMs, close, volume, traded, costPerUnit, margin, marginPct, r7, r30, r90]
+// build-dataset.mjs - modelling table: daily prices + game structure + materials cost anchor + labour cost.
+// Row: [ticker, cx, day, close, volume, traded, matCost, matMargin, matMarginPct, r7, r30, r90, labourCost, totCost, totMarginPct]
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -13,6 +11,9 @@ const DATA = path.join(ROOT, 'data');
 const CACHE = path.join(ROOT, 'cache');
 fs.mkdirSync(CACHE, { recursive: true });
 const UA = { 'User-Agent': 'prun-price-fit/1.0 (read-only)', Accept: 'application/json,*/*' };
+
+import { BASKETS, DAY_MS } from './baskets.mjs';
+
 
 async function gameData(name, url) {
   const f = path.join(CACHE, name + '.json');
@@ -29,6 +30,14 @@ const [recipes, materials, buildings] = await Promise.all([
   gameData('materials', 'https://api.prunplanner.org/data/materials/'),
   gameData('buildings', 'https://api.prunplanner.org/data/buildings/'),
 ]);
+
+const buildingWorkers = new Map();
+for (const b of buildings) {
+  buildingWorkers.set(b.building_ticker, {
+    pioneers: Number(b.pioneers) || 0, settlers: Number(b.settlers) || 0, technicians: Number(b.technicians) || 0,
+    engineers: Number(b.engineers) || 0, scientists: Number(b.scientists) || 0,
+  });
+}
 
 const names = new Map(materials.map(m => [m.ticker, { name: m.name, category: m.category_name }]));
 const recipeConsumers = new Map();
@@ -52,7 +61,12 @@ for (const r of recipes) {
   }
   for (const o of outs) {
     if (!producers.has(o.t)) producers.set(o.t, []);
-    producers.get(o.t).push({ building: r.building_ticker, timeMs: Number(r.time_ms) || 0, inputs: ins.map(i => ({ t: i.t, per: o.a ? i.a / o.a : 0 })) });
+    producers.get(o.t).push({
+      building: r.building_ticker,
+      timeMs: Number(r.time_ms) || 0,
+      outAmount: o.a || 1,
+      inputs: ins.map(i => ({ t: i.t, per: o.a ? i.a / o.a : 0 })),
+    });
   }
 }
 
@@ -105,21 +119,36 @@ for (const line of raw) {
 }
 for (const arr of series.values()) arr.sort((a, b) => a.d - b.d);
 
-const DAY = 86400000;
+const DAY = DAY_MS;
 function priceNear(ticker, cx, day) {
   const m = priceAt.get(ticker + '|' + cx);
   if (!m) return null;
   for (let k = 0; k <= 7; k++) { const p = m.get(day - k * DAY); if (p != null) return p; }
   return null;
 }
+const basketCost = (tier, cx, day) => {
+  let sum = 0;
+  for (const [mat, amount] of Object.entries(BASKETS[tier])) {
+    const p = priceNear(mat, cx, day);
+    if (p == null) return null;
+    sum += p * amount;
+  }
+  return sum;
+};
 
-let rows = 0, withCost = 0;
-const margins = [];
-const out = fs.createWriteStream(path.join(DATA, 'dataset.jsonl.gz'));
+let rows = 0, withCost = 0, withLabour = 0;
+const matMargins = [], totMargins = [];
 await pipeline(async function* () {
   for (const [key, arr] of series) {
     const [ticker, cx] = key.split('|');
     const recs = producers.get(ticker) || [];
+    // labour cost per unit = sum over tiers of (workers/100 * daily basket cost) * (duration in days) / output
+    const labourRecs = recs.map(r => {
+      const w = buildingWorkers.get(r.building);
+      if (!w) return null;
+      const days = r.timeMs / DAY_MS;
+      return { building: r.building, days, outAmount: r.outAmount, workers: w };
+    }).filter(Boolean);
     for (let i = 0; i < arr.length; i++) {
       const { d, c, v, n } = arr[i];
       let cost = null;
@@ -133,20 +162,36 @@ await pipeline(async function* () {
         }
         if (ok && (cost == null || sum < cost)) cost = sum;
       }
+      let labour = null;
+      for (const lr of labourRecs) {
+        let per = 0, ok = true;
+        for (const [tier, w] of Object.entries(lr.workers)) {
+          if (!w) continue;
+          const bc = basketCost(tier, cx, d);
+          if (bc == null) { ok = false; break; }
+          per += (w / 100) * bc;
+        }
+        if (!ok) continue;
+        const unit = per * lr.days / (lr.outAmount || 1);
+        if (labour == null || unit < labour) labour = unit;
+      }
       const fwd = (k) => (i + k < arr.length ? Math.log(arr[i + k].c / c) : null);
       const mg = cost != null ? c - cost : null;
       const mgp = cost != null && c > 0 ? mg / c : null;
-      if (cost != null) { withCost++; margins.push(mgp); }
+      const tot = (cost != null) ? cost + (labour || 0) : null;
+      const tmp = tot != null && c > 0 ? (c - tot) / c : null;
+      if (cost != null) { withCost++; matMargins.push(mgp); }
+      if (tot != null) { withLabour++; totMargins.push(tmp); }
       rows++;
-      yield JSON.stringify([ticker, cx, d, c, v, n, cost, mg, mgp, fwd(7), fwd(30), fwd(90)]) + '\n';
+      yield JSON.stringify([ticker, cx, d, c, v, n, cost, mg, mgp, fwd(7), fwd(30), fwd(90), labour, tot, tmp]) + '\n';
     }
   }
-}(), zlib.createGzip({ level: 6 }), out);
+}(), zlib.createGzip({ level: 6 }), fs.createWriteStream(path.join(DATA, 'dataset.jsonl.gz')));
 
-margins.sort((a, b) => a - b);
-const q = (x) => margins.length ? margins[Math.floor(x * (margins.length - 1))] : null;
+const q = (arr, x) => { if (!arr.length) return null; const s = arr.slice().sort((a, b) => a - b); return s[Math.floor(x * (s.length - 1))]; };
 console.log(JSON.stringify({
-  series: series.size, rows, withCost, costCoverage: +(withCost / rows).toFixed(3),
-  marginPct: { p05: q(0.05), median: q(0.5), p95: q(0.95) },
+  series: series.size, rows, matCostCoverage: +(withCost / rows).toFixed(3), labourCoverage: +(withLabour / rows).toFixed(3),
+  materialsMarginPct: { p05: q(matMargins, 0.05), median: q(matMargins, 0.5), p95: q(matMargins, 0.95) },
+  afterLabourMarginPct: { p05: q(totMargins, 0.05), median: q(totMargins, 0.5), p95: q(totMargins, 0.95) },
   datasetMB: +(fs.statSync(path.join(DATA, 'dataset.jsonl.gz')).size / 1048576).toFixed(2),
 }, null, 1));
