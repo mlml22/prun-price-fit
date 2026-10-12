@@ -356,6 +356,9 @@ fs.writeFileSync(path.join(SITE, 'freight.json'), JSON.stringify({ generatedAt: 
 console.log('freight rows:', Object.keys(freight).length);
 
 // ---- monthly supply/demand model (raylu production flows) ----
+const MINEABLE = new Set();
+for (const p of PLANETS) for (const r of (p.resources || [])) { const t = r.material_ticker || r.materialTicker; if (t && r.factor > 0) MINEABLE.add(t); }
+console.log('mineable materials (planet factor data):', MINEABLE.size);
 const rayMonths = Object.keys(RAYLU).sort();
 const pm = (t, mk) => { const arr = (priceByMonth.get(t) || new Map()).get(mk); if (!arr || !arr.length) return null; const s = arr.slice().sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
 const supplyRows = [];
@@ -364,7 +367,7 @@ for (let i = 0; i < rayMonths.length; i++) {
   for (const [t, v] of Object.entries(RAYLU[m])) {
     const p = pm(t, mk), pNext = nxt ? pm(t, monthKey(nxt)) : null;
     const pv = prev ? RAYLU[prev][t] : null;
-    supplyRows.push({ month: m, t, raw: !RAW_SET.has(t), amount: v.amount, consumed: v.consumed, volume: v.volume, profit: v.profit,
+    supplyRows.push({ month: m, t, raw: MINEABLE.has(t), amount: v.amount, consumed: v.consumed, volume: v.volume, profit: v.profit,
       ret: (p && pNext && p > 0) ? Math.log(pNext / p) : null,
       surplus: (v.amount && v.consumed != null) ? (v.amount - v.consumed) / Math.max(v.amount, v.consumed) : null,
       growth: (pv && pv.amount) ? v.amount / pv.amount - 1 : null,
@@ -406,10 +409,10 @@ for (const [t, v] of Object.entries(RAYLU[lastMonth] || {})) {
   const ppu = v.amount ? v.profit / v.amount : null;
   const expected = (supplyFit && surplus != null && growth != null && ppu != null)
     ? +(100 * (supplyFit.beta[0] + supplyFit.beta[1] * surplus + supplyFit.beta[2] * growth + supplyFit.beta[3] * ppu)).toFixed(2) : null;
-  supply[t] = { month: lastMonth, name: (feats[t] || {}).name || '', raw: !RAW_SET.has(t), amount: v.amount, consumed: v.consumed, volume: v.volume, profit: v.profit, surplus: surplus == null ? null : +(surplus * 100).toFixed(1), supplyGrowthPct: growth == null ? null : +(growth * 100).toFixed(1), profitPerUnit: ppu == null ? null : +ppu.toFixed(2), expectedNextMonthPct: expected };
+  supply[t] = { month: lastMonth, name: (feats[t] || {}).name || '', raw: MINEABLE.has(t), amount: v.amount, consumed: v.consumed, volume: v.volume, profit: v.profit, surplus: surplus == null ? null : +(surplus * 100).toFixed(1), supplyGrowthPct: growth == null ? null : +(growth * 100).toFixed(1), profitPerUnit: ppu == null ? null : +ppu.toFixed(2), expectedNextMonthPct: expected };
 }
 for (const b of board) { const s = supply[b.ticker]; if (s) { b.supplySurplusPct = s.surplus; b.supplyGrowthPct = s.supplyGrowthPct; b.supplyExpectedPct = s.expectedNextMonthPct; b.isRaw = s.raw; } }
-fs.writeFileSync(path.join(SITE, 'supply.json'), JSON.stringify({ generatedAt: new Date().toISOString(), month: lastMonth, model: 'next-month log return = a + b1*surplus + b2*supplyGrowth + b3*profitPerUnit (monthly panel, in-sample)', fit: supplyFit, note: 'surplus = (产量 - 消耗) / max(产量, 消耗)；raw = 不由任何消耗型配方生产的材料（采掘类）', byTicker: supply }, null, 1));
+fs.writeFileSync(path.join(SITE, 'supply.json'), JSON.stringify({ generatedAt: new Date().toISOString(), month: lastMonth, model: 'next-month log return = a + b1*surplus + b2*supplyGrowth + b3*profitPerUnit + b4*extractionMargin (monthly panel, in-sample)', fit: (globalThis.__supplyModelInfo ? globalThis.__supplyModelInfo.fit4 : supplyFit), fit3: (globalThis.__supplyModelInfo ? globalThis.__supplyModelInfo.fit3 : null), ic: (globalThis.__supplyModelInfo ? globalThis.__supplyModelInfo.ic : null), note: 'surplus = (产量 - 消耗) / max(产量, 消耗)；raw = 不由任何消耗型配方生产的材料（采掘类）', byTicker: supply }, null, 1));
 console.log('supply rows:', Object.keys(supply).length, '| raw:', Object.values(supply).filter(x => x.raw).length);
 
 // ---- extraction cost anchor for mined materials ----
@@ -437,7 +440,7 @@ for (const [t, list] of factorByMaterial) {
   const options = [['RIG', rig], ['EXT', ext], ['COL', col]].filter(x => x[1]);
   if (!options.length) continue;
   const bestOpt = options.slice().sort((a, b2) => a[1].perUnit - b2[1].perUnit)[0];
-  extraction[t] = { ticker: t, raw: !RAW_SET.has(t), price: last.c, planets: sorted.length,
+  extraction[t] = { ticker: t, raw: MINEABLE.has(t), price: last.c, planets: sorted.length,
     bestPlanet: best.planet, bestFactor: +best.factor.toFixed(3), midFactor: +mid.factor.toFixed(3),
     building: bestOpt[0], unitsPerDay: +bestOpt[1].unitsPerDay.toFixed(1), labour: +bestOpt[1].labour.toFixed(1), wear: +bestOpt[1].wear.toFixed(1),
     costPerUnit: +bestOpt[1].perUnit.toFixed(2), marginPct: +(((last.c - bestOpt[1].perUnit) / last.c) * 100).toFixed(1),
@@ -448,6 +451,73 @@ fs.writeFileSync(path.join(SITE, 'extraction.json'), JSON.stringify({ generatedA
   model: 'units/day = 70 x planet factor (calibrated from the account\'s own RIG/EXT extraction orders); daily cost = workforce consumables + building wear',
   buildings: { RIG: '30 pioneers', EXT: '60 pioneers', COL: '50 pioneers' }, byMaterial: extraction }, null, 1));
 console.log('extraction anchors:', Object.keys(extraction).length, '| raw with cost:', Object.values(extraction).filter(x => x.raw).length);
+
+// ---- extraction margin as a 4th monthly factor: does "cheap to mine, expensive ore" predict next month? ----
+const maxFactor = new Map();
+for (const [t, list] of factorByMaterial) { let mf = 0; for (const x of list) if (x.factor > mf) mf = x.factor; maxFactor.set(t, mf); }
+for (const row of supplyRows) {
+  const mf = maxFactor.get(row.t);
+  if (!mf) continue;
+  const mk = monthKey(row.month);
+  const priceOfMonth = (mat) => pm(mat, mk);
+  let best = null;
+  for (const bn of ['RIG', 'EXT', 'COL']) { const c = extractionCostPerUnit(bn, mf, priceOfMonth); if (c && (!best || c.perUnit < best.perUnit)) best = c; }
+  const price = pm(row.t, mk);
+  if (!best || !(price > 0)) continue;
+  row.xcost = +best.perUnit.toFixed(3);
+  row.xmargin = (price - best.perUnit) / price;
+}
+const mIC = (fx, fy, subset, fyName) => {
+  const ics = [];
+  for (const m of rayMonths) {
+    const L = supplyRows.filter(r => r.month === m && (!subset || (subset === 'raw' ? r.raw : !r.raw)) && fx(r) != null && fy(r) != null && Number.isFinite(fx(r)) && Number.isFinite(fy(r)));
+    if (L.length < 12) continue;
+    ics.push(corr(rankify(L.map(fx)), rankify(L.map(fy))));
+  }
+  const ok = ics.filter(x => x != null);
+  return { ic: +(100 * (ok.reduce((a, b) => a + b, 0) / (ok.length || 1))).toFixed(1), months: ok.length, posPct: Math.round(100 * ok.filter(x => x > 0).length / (ok.length || 1)) };
+};
+console.log('monthly IC (next-month return):');
+for (const [lbl, fx] of [['surplus', r => r.surplus], ['supplyGrowth', r => r.growth], ['profitPerUnit', r => r.ppu], ['extractionMargin', r => r.xmargin]]) {
+  console.log('  ' + lbl.padEnd(16) + ' all=' + JSON.stringify(mIC(fx, r => r.ret)) + '  raw=' + JSON.stringify(mIC(fx, r => r.ret, 'raw')));
+}
+const mOls = (rowsIn, useX) => {
+  const k = useX ? 5 : 4;
+  const X = rowsIn.map(r => useX ? [1, r.surplus, r.growth, r.ppu, r.xmargin] : [1, r.surplus, r.growth, r.ppu]);
+  const y = rowsIn.map(r => r.ret);
+  const XtX = Array.from({ length: k }, () => new Array(k).fill(0));
+  const Xty = new Array(k).fill(0);
+  for (let i = 0; i < X.length; i++) for (let a = 0; a < k; a++) { Xty[a] += X[i][a] * y[i]; for (let b = 0; b < k; b++) XtX[a][b] += X[i][a] * X[i][b]; }
+  for (let i = 0; i < k; i++) XtX[i][i] *= 1.000001;
+  const M = XtX.map((r2, i) => r2.concat([Xty[i]]));
+  for (let c = 0; c < k; c++) {
+    let piv = c; for (let r2 = c + 1; r2 < k; r2++) if (Math.abs(M[r2][c]) > Math.abs(M[piv][c])) piv = r2;
+    const tmp = M[c]; M[c] = M[piv]; M[piv] = tmp;
+    if (!M[c][c]) continue;
+    for (let r2 = 0; r2 < k; r2++) { if (r2 === c) continue; const f2 = M[r2][c] / M[c][c]; for (let c2 = c; c2 <= k; c2++) M[r2][c2] -= f2 * M[c][c2]; }
+  }
+  const beta = M.map((row, i) => (row[i] ? row[k] / row[i] : 0));
+  let sse = 0, sst = 0;
+  const my = y.reduce((a, b) => a + b, 0) / y.length;
+  for (let i = 0; i < X.length; i++) { const pred = X[i].reduce((a, v, j2) => a + v * beta[j2], 0); sse += (y[i] - pred) ** 2; sst += (y[i] - my) ** 2; }
+  return { beta, sigma: Math.sqrt(sse / Math.max(1, X.length - k)), r2: sst ? 1 - sse / sst : 0, n: X.length, k };
+};
+const fit3 = mOls(supplyRows.filter(r => r.ret != null && r.surplus != null && r.growth != null && r.ppu != null), false);
+const fit4 = mOls(supplyRows.filter(r => r.ret != null && r.xmargin != null), true);
+console.log('supply model (3 factors): r2=' + (fit3.r2 * 100).toFixed(2) + '% sigma=' + (fit3.sigma * 100).toFixed(2) + '% n=' + fit3.n);
+console.log('supply model (4 factors, +extractionMargin): r2=' + (fit4.r2 * 100).toFixed(2) + '% sigma=' + (fit4.sigma * 100).toFixed(2) + '% n=' + fit4.n + ' beta=' + fit4.beta.map(x => x.toFixed(4)).join(','));
+// refresh the live expectation with the 4-factor model where the margin is known
+for (const [t, s2] of Object.entries(supply)) {
+  const rows4 = supplyRows.filter(r => r.t === t && r.month === s2.month && r.xmargin != null);
+  if (!rows4.length) continue;
+  const r4 = rows4[0];
+  s2.extractionMarginPct = +((r4.xmargin) * 100).toFixed(1);
+  s2.extractCostMonth = r4.xcost;
+  s2.expectedNextMonth4 = +(100 * (fit4.beta[0] + fit4.beta[1] * r4.surplus + fit4.beta[2] * r4.growth + fit4.beta[3] * r4.ppu + fit4.beta[4] * r4.xmargin)).toFixed(2);
+}
+for (const b of board) { const s3 = supply[b.ticker]; if (s3) { b.extractionMarginPct = s3.extractionMarginPct == null ? null : s3.extractionMarginPct; b.supplyExpectedPct = s3.expectedNextMonthPct; } }
+const supplyModelInfo = { fit3: { beta: fit3.beta, sigma: fit3.sigma, r2: fit3.r2, n: fit3.n }, fit4: { beta: fit4.beta, sigma: fit4.sigma, r2: fit4.r2, n: fit4.n }, ic: { surplus: mIC(r => r.surplus, r => r.ret), supplyGrowth: mIC(r => r.growth, r => r.ret), profitPerUnit: mIC(r => r.ppu, r => r.ret), extractionMargin: mIC(r => r.xmargin, r => r.ret), extractionMarginRaw: mIC(r => r.xmargin, r => r.ret, 'raw'), surplusRaw: mIC(r => r.surplus, r => r.ret, 'raw') } };
+globalThis.__supplyModelInfo = supplyModelInfo;
 
 const z = (arr) => { const m = mean(arr), s = sd(arr) || 1; return (x) => (x - m) / s; };
 const zDemand = z(board.map(b => (b.recipeDownstream || 0) + (b.constructionDownstream || 0)));
