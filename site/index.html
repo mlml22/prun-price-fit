@@ -30,6 +30,14 @@
   input[type=search] { background:var(--card); border:1px solid var(--line); color:var(--fg); padding:7px 10px; border-radius:8px; width:230px; }
   .note { color:var(--dim); font-size:12.5px; margin-top:8px; }
   code { background:#20242e; padding:1px 5px; border-radius:4px; font-size:12px; }
+  .toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:14px 0 0; }
+  .toolbar button, #tokenBox button { background:#1f4fd8; border:1px solid #1f4fd8; color:#fff; padding:7px 14px; border-radius:8px; cursor:pointer; font-size:13.5px; }
+  .toolbar button:disabled { background:#232936; border-color:#232936; color:#7d8694; cursor:default; }
+  .toolbar a { color:var(--acc); text-decoration:none; font-size:12.5px; }
+  #tokenBox { display:none; gap:8px; align-items:center; flex-wrap:wrap; margin:10px 0 0; }
+  #tokenBox input { background:var(--card); border:1px solid var(--line); color:var(--fg); padding:7px 10px; border-radius:8px; width:340px; }
+  #tokenBox button { padding:7px 12px; }
+  #tokenBox button.ghost { background:transparent; border-color:var(--line); color:var(--dim); }
   .warn { border-left:3px solid #f59e0b; padding:8px 12px; background:#1d1a12; border-radius:6px; color:#f0d9a8; font-size:12.5px; }
 </style>
 </head>
@@ -39,6 +47,19 @@
   <div class="sub" id="headline">加载中…</div>
 </header>
 <main>
+  <div class="toolbar">
+    <button id="runBtn">立即更新数据</button>
+    <span class="sub" id="runStatus"></span>
+    <a href="#" id="tokenLink">设置 token</a>
+    <span class="sub" id="nextRun"></span>
+  </div>
+  <div id="tokenBox">
+    <input id="tokenInput" type="password" placeholder="粘贴只限本仓库的 fine-grained PAT">
+    <button id="tokenSave">保存到本机</button>
+    <button id="tokenClear" class="ghost">清除</button>
+    <span class="sub">只存在这台电脑浏览器的 localStorage，不会上传；换电脑要重新填。</span>
+  </div>
+
   <section>
     <div class="cards" id="cards"></div>
     <div class="warn" style="margin-top:12px">这是研究工具，不是投资建议。目标变量是<b>价格</b>（30/90 天远期收益），特征来自原料成本锚 + 生产链结构 + 市场结构。所有数字都可以从公开接口复现。</div>
@@ -123,6 +144,58 @@ const signCls = (x) => x == null ? '' : (x > 0 ? 'pos' : (x < 0 ? 'neg' : ''));
   render();
   document.getElementById('filter').addEventListener('input', (e) => render(e.target.value));
 })();
+</script>
+<script>
+// ---- manual refresh (independent of the scheduled runs) ----
+const REPO = 'mlml22/prun-price-fit';
+const WF = 'daily.yml';
+const TOKEN_KEY = 'prun_fit_pat';
+const $b = (id) => document.getElementById(id);
+function setStatus(t) { $b('runStatus').textContent = t; }
+function showBox(on) { $b('tokenBox').style.display = on ? 'flex' : 'none'; if (on) $b('tokenInput').focus(); }
+$b('nextRun').textContent = '自动运行：每天 08:08 / 20:08（北京）';
+$b('tokenLink').addEventListener('click', (e) => { e.preventDefault(); const open = $b('tokenBox').style.display !== 'flex'; showBox(open); if (open) $b('tokenInput').value = localStorage.getItem(TOKEN_KEY) || ''; });
+$b('tokenSave').addEventListener('click', () => { const v = $b('tokenInput').value.trim(); if (!v) return; localStorage.setItem(TOKEN_KEY, v); showBox(false); setStatus('token 已保存在本机'); });
+$b('tokenClear').addEventListener('click', () => { localStorage.removeItem(TOKEN_KEY); $b('tokenInput').value = ''; setStatus('token 已清除'); });
+async function runStatus() {
+  const r = await fetch(`https://api.github.com/repos/${REPO}/actions/runs?per_page=1`);
+  if (!r.ok) return null;
+  const j = await r.json();
+  return (j.workflow_runs || [])[0] || null;
+}
+async function poll(deadlineMs) {
+  while (Date.now() < deadlineMs) {
+    const run = await runStatus().catch(() => null);
+    if (run) {
+      const lbl = run.status === 'completed' ? (run.conclusion || 'done') : run.status;
+      setStatus(`GitHub 正在跑：${lbl}（${run.event}）…`);
+      if (run.status === 'completed') {
+        if (run.conclusion === 'success') { setStatus('完成，正在重新加载数据…'); setTimeout(() => location.reload(), 1200); }
+        else setStatus('这次运行失败了：' + run.conclusion + '，点按钮可重试');
+        return;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 8000));
+  }
+  setStatus('还在跑，稍后刷新页面即可');
+}
+$b('runBtn').addEventListener('click', async () => {
+  const token = localStorage.getItem(TOKEN_KEY) || '';
+  if (!token) { setStatus('先设置一次 token（只存本机）'); showBox(true); return; }
+  $b('runBtn').disabled = true;
+  setStatus('正在触发…');
+  try {
+    const r = await fetch(`https://api.github.com/repos/${REPO}/actions/workflows/${WF}/dispatches`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ref: 'main' }),
+    });
+    if (r.status === 204) { setStatus('已触发，等待 GitHub 排队…'); poll(Date.now() + 6 * 60 * 1000); }
+    else if (r.status === 401 || r.status === 403) setStatus(`token 无效或权限不足（HTTP ${r.status}）`);
+    else setStatus('触发失败：HTTP ' + r.status);
+  } catch (e) { setStatus('触发出错：' + e.message); }
+  finally { $b('runBtn').disabled = false; }
+});
 </script>
 </body>
 </html>
