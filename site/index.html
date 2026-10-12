@@ -230,8 +230,8 @@ const signCls = (x) => x == null ? '' : (x > 0 ? 'pos' : (x < 0 ? 'neg' : ''));
         <td class="dim">${r.inflationAnnualPct == null ? '—' : r.inflationAnnualPct + '%'}</td>
         <td class="${signCls(r.marginPct != null && r.inflationAnnualPct != null ? r.marginPct - r.inflationAnnualPct : null)}">${r.marginPct == null || r.inflationAnnualPct == null ? '—' : (r.marginPct - r.inflationAnnualPct).toFixed(1) + '%'}</td>
         <td class="${signCls(r.expected30Pct)}">${r.expected30Pct == null ? '—' : fmt(r.expected30Pct, 1) + '%'}</td>
-        <td class="${signCls(r.supplyExpectedPct)}">${r.supplyExpectedPct == null ? '—' : ((r.supplyExpectedPct > 0 ? '+' : '') + fmt(r.supplyExpectedPct, 1) + '%')}${r.supplySurplusPct != null ? ' <span class="dim">(过剩 ' + fmt(r.supplySurplusPct, 0) + '%)</span>' : ''}</td>
         <td class="${signCls(r.vsCheapest)}">${r.vsCheapest == null ? '—' : (r.vsCheapest > 0 ? '+' : '') + fmt(r.vsCheapestPct, 1) + '%' + (r.breakEvenUnits ? ' · ≥' + num(r.breakEvenUnits) + '件才值一趟' : '')}</td>
+        <td class="${signCls(r.supplyExpectedPct)}">${r.supplyExpectedPct == null ? '—' : ((r.supplyExpectedPct > 0 ? '+' : '') + fmt(r.supplyExpectedPct, 1) + '%')}${r.supplySurplusPct != null ? ' <span class="dim">(过剩 ' + fmt(r.supplySurplusPct, 0) + '%)</span>' : ''}</td>
         <td>${r.marginPctile == null ? '—' : r.marginPctile + '%'}</td>
         <td>${r.recipeDownstream}</td>
         <td>${r.constructionDownstream}</td>
