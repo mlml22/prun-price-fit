@@ -56,6 +56,10 @@
   <div class="wrap"><canvas id="cv"></canvas><div class="tip" id="tip"></div></div>
   <div class="note" id="fcNote"></div>
 
+  <h2>跨所价差与运费</h2>
+  <div id="freight"></div>
+  <div class="note" id="fnote"></div>
+
   <div class="cards" id="cards"></div>
 
   <h2>成本锚拆解（按同交易所当日价）</h2>
@@ -69,7 +73,7 @@ const int = (x) => (x == null) ? '—' : Number(x).toLocaleString('en-US');
 const params = new URLSearchParams(location.search);
 const T = (params.get('t') || 'RAT').toUpperCase();
 
-let DATA = null, BOARD = null, FORECAST = null, FC = null, cxList = [], cx = params.get('cx'), view = null, hover = null;
+let DATA = null, BOARD = null, FORECAST = null, FREIGHT = null, FC = null, cxList = [], cx = params.get('cx'), view = null, hover = null;
 const FUTURE_FRAC = 0.18;   // share of the plot width reserved for the model's forward path
 
 const cv = $('#cv'), ctx = cv.getContext('2d');
@@ -246,6 +250,7 @@ function breakdownHtml(row) {
   const [hres, bres] = await Promise.all([fetch(`data/hist/${T}.json.gz?v=${ver}`), fetch('data/board.json?v=' + ver)]);
   const json = JSON.parse(await new Response(hres.body.pipeThrough(new DecompressionStream('gzip'))).text());
   BOARD = await bres.json();
+  FREIGHT = await fetch('data/freight.json?v=' + ver).then(r => r.json()).catch(() => null);
   const fcRes = await fetch('data/forecast.json?v=' + ver).then(r => r.json()).catch(() => null);
   FORECAST = fcRes;
   FC = (fcRes && fcRes.bySeries && fcRes.bySeries[T + '|' + cx]) || null;
@@ -265,6 +270,7 @@ function breakdownHtml(row) {
   }));
   const row = BOARD.rows.find(r => r.ticker === T && r.cx === cx);
   $('#breakdown').innerHTML = breakdownHtml(row);
+  renderFreight();
   $('#bnote').textContent = '人工成本 = Σ(该建筑各层级工人数/100 × 该层级「每 100 人每日消耗品篮子」) × 生产时长 ÷ 产出数量。先驱/定居者篮子已与官方手册核对；技术员/工程师/科学家篮子取自游戏自带的 PAC 人口配方（÷10 折算成日）；不含建筑折旧与税费。';
   if (FORECAST && FORECAST.fit30) {
     $('#fcNote').innerHTML = '虚线 = 拟合模型给出的<b>价格路径预期</b>（r = a + b1×离 10 日均线距离 + b2×总毛利率 + b3×低波动），阴影 = ±1σ 残差区间。样本内拟合：30 天 R² ' + (FORECAST.fit30.r2 * 100).toFixed(1) + '%、σ ' + (FORECAST.fit30.sigma * 100).toFixed(1) + '%；90 天 R² ' + (FORECAST.fit90.r2 * 100).toFixed(1) + '%、σ ' + (FORECAST.fit90.sigma * 100).toFixed(1) + '%。不是投资建议，残差很大。';
@@ -274,6 +280,19 @@ function breakdownHtml(row) {
   resize();
 })();
 
+function renderFreight() {
+  const box = $('#freight'), note = $('#fnote');
+  const f = FREIGHT && FREIGHT.byTicker && FREIGHT.byTicker[T];
+  if (!f || Object.keys(f.prices).length < 2) { box.innerHTML = '<div class="note">该商品只有一个交易所有成交，无法做跨所比较。</div>'; note.textContent = ''; return; }
+  const trip = FREIGHT.tripCost || 10000;
+  const rows = Object.entries(f.prices).sort((a, b) => a[1] - b[1]).map(([c2, p2]) => {
+    const gap = p2 - f.prices[f.cheapest];
+    const be = gap > 0 ? Math.ceil(trip / gap) : null;
+    return `<tr><td>${c2}${c2 === f.cheapest ? ' <span class="dim">(最低)</span>' : (c2 === f.dearest ? ' <span class="dim">(最高)</span>' : '')}</td><td>${fmt(p2)}</td><td class="${gap > 0 ? 'neg' : ''}">${gap === 0 ? '—' : '+' + fmt(gap)}</td><td>${be ? '≥ ' + int(be) + ' 件' : '—'}</td></tr>`;
+  }).join('');
+  box.innerHTML = `<table><thead><tr><th>交易所</th><th>最新价</th><th>比最低所贵</th><th>跑一趟的保本量</th></tr></thead><tbody>${rows}</tbody></table>`;
+  note.innerHTML = '单程运费按 <b>' + int(trip) + '</b> 估算（' + (FREIGHT.tripCostSource || '') + '）。保本量 = 单程运费 ÷ 单位价差：低于这个量，把货从最低价交易所搬到高价所不划算。跨所价差 ≤ 运费时，说明价差是运费造成的、不是机会。';
+}
 function renderCards() {
   const row = BOARD.rows.find(r => r.ticker === T && r.cx === cx);
   if (!row) { $('#cards').innerHTML = ''; return; }
