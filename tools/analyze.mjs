@@ -95,8 +95,8 @@ const manifest = JSON.parse(fs.readFileSync(path.join(DATA, 'cxpc-manifest.json'
 const rows = [];
 for (const line of zlib.gunzipSync(fs.readFileSync(path.join(DATA, 'dataset.jsonl.gz'))).toString('utf8').split('\n')) {
   if (!line) continue;
-  const [t, cx, d, c, v, n, cost, mg, mgp, r7, r30, r90, lab, tot, tmp] = JSON.parse(line);
-  rows.push({ t, cx, d, c, v, n, cost, mg, mgp, r7, r30, r90, lab, tot, tmp });
+  const [t, cx, d, c, v, n, cost, mg, mgp, r7, r30, r90, lab, tot, tmp, dep] = JSON.parse(line);
+  rows.push({ t, cx, d, c, v, n, cost, mg, mgp, r7, r30, r90, lab, tot, tmp, dep });
 }
 
 const priceAtGlobal = new Map();
@@ -178,6 +178,53 @@ for (const h of [30, 90]) {
   }
 }
 
+// ---- 2b) forecast model: expected forward log return from three validated factors ----
+// r30 ~ a + b1*(-(p/sma10-1)) + b2*totalMarginPct + b3*(-vol20)   (pooled OLS, in-sample)
+// The mean-reversion factor is the only one with a strong, stable IC; the other two are controls.
+function ols(rowsIn, target) {
+  const X = rowsIn.map(r => [1, r.f1, r.f2, r.f3]);
+  const y = rowsIn.map(r => r[target]);
+  const k = 4;
+  const XtX = Array.from({ length: k }, () => new Array(k).fill(0));
+  const Xty = new Array(k).fill(0);
+  for (let i = 0; i < X.length; i++) {
+    for (let a = 0; a < k; a++) {
+      Xty[a] += X[i][a] * y[i];
+      for (let b = 0; b < k; b++) XtX[a][b] += X[i][a] * X[i][b];
+    }
+  }
+  // Gaussian elimination with tiny ridge for safety
+  for (let i = 0; i < k; i++) XtX[i][i] *= 1.000001;
+  const M = XtX.map((row, i) => row.concat([Xty[i]]));
+  for (let col = 0; col < k; col++) {
+    let piv = col;
+    for (let r2 = col + 1; r2 < k; r2++) if (Math.abs(M[r2][col]) > Math.abs(M[piv][col])) piv = r2;
+    const tmp = M[col]; M[col] = M[piv]; M[piv] = tmp;
+    if (!M[col][col]) continue;
+    for (let r2 = 0; r2 < k; r2++) {
+      if (r2 === col) continue;
+      const f2 = M[r2][col] / M[col][col];
+      for (let c2 = col; c2 <= k; c2++) M[r2][c2] -= f2 * M[col][c2];
+    }
+  }
+  const beta = M.map((row, i) => (row[i] ? row[k] / row[i] : 0));
+  let sse = 0, sst = 0;
+  const my = y.reduce((a, b) => a + b, 0) / y.length;
+  for (let i = 0; i < X.length; i++) {
+    const pred = X[i].reduce((a, v, j2) => a + v * beta[j2], 0);
+    sse += (y[i] - pred) ** 2;
+    sst += (y[i] - my) ** 2;
+  }
+  return { beta, sigma: Math.sqrt(sse / Math.max(1, X.length - k)), r2: sst ? 1 - sse / sst : 0, n: X.length };
+}
+
+const modelRows = rows.filter(r => r.r30 != null && r.sma10 && r.vol20 != null && r.tmp != null)
+  .map(r => ({ t: r.t, cx: r.cx, d: r.d, c: r.c, f1: -(r.c / r.sma10 - 1), f2: r.tmp, f3: -r.vol20, r30: r.r30, r90: r.r90 }));
+const fit30 = ols(modelRows.filter(r => r.r30 != null), 'r30');
+const fit90 = ols(modelRows.filter(r => r.r90 != null), 'r90');
+console.log('forecast model r30: r2=' + (fit30.r2 * 100).toFixed(2) + '% sigma=' + (fit30.sigma * 100).toFixed(2) + '% beta=' + fit30.beta.map(x => x.toFixed(4)).join(','));
+console.log('forecast model r90: r2=' + (fit90.r2 * 100).toFixed(2) + '% sigma=' + (fit90.sigma * 100).toFixed(2) + '%');
+
 // ---- 3) today's board ----
 // cost breakdown for the detail page: best producing recipe + labour basket, priced on the row's own day
 const CACHE = path.join(ROOT, 'cache');
@@ -221,7 +268,7 @@ for (const [key, arr] of bySeries) {
   board.push({
     ticker: t, cx, name: f.name || '', category: f.category || '',
     day: new Date(last.d).toISOString().slice(0, 10), daysAgo: lag,
-    price: last.c, matCost: last.cost, labourCost: last.lab, totalCost: last.tot,
+    price: last.c, matCost: last.cost, labourCost: last.lab, depreciationCost: last.dep, totalCost: last.tot,
     matMarginPct: last.mgp != null ? +(last.mgp * 100).toFixed(1) : null,
     marginPct: last.tmp != null ? +(last.tmp * 100).toFixed(1) : null,
     marginPctile: pct, traded: last.n, tradedMoney30d: Math.round(last.liq30 || 0),
@@ -235,6 +282,29 @@ for (const [key, arr] of bySeries) {
     costBreakdown: breakdown ? { building: breakdown.building, timeMs: breakdown.timeMs, outAmount: breakdown.outAmount, matItems: breakdown.matItems, matCost: breakdown.matCost, labourCost: breakdown.labourCost, labourDetail: breakdown.labourDetail, totalCost: breakdown.totalCost } : null,
   });
 }
+const forecasts = {};
+for (const b of board) {
+  const arr = bySeries.get(b.ticker + '|' + b.cx);
+  const last = arr && arr[arr.length - 1];
+  if (!last || !last.sma10 || last.vol20 == null || last.tmp == null) continue;
+  const x = [1, -(last.c / last.sma10 - 1), last.tmp, -last.vol20];
+  const p30 = x.reduce((a, v, j2) => a + v * fit30.beta[j2], 0);
+  const p90 = x.reduce((a, v, j2) => a + v * fit90.beta[j2], 0);
+  forecasts[b.ticker + '|' + b.cx] = {
+    expected30Pct: +(p30 * 100).toFixed(2), expected90Pct: +(p90 * 100).toFixed(2),
+    band30Pct: +(fit30.sigma * 100).toFixed(2), band90Pct: +(fit90.sigma * 100).toFixed(2),
+    meanRevert: +(-(last.c / last.sma10 - 1) * 100).toFixed(2), totalMarginPct: +(last.tmp * 100).toFixed(1),
+  };
+  b.expected30Pct = forecasts[b.ticker + '|' + b.cx].expected30Pct;
+  b.expected90Pct = forecasts[b.ticker + '|' + b.cx].expected90Pct;
+}
+fs.writeFileSync(path.join(SITE, 'forecast.json'), JSON.stringify({ generatedAt: new Date().toISOString(),
+  model: 'r30/r90 = a + b1*(-(p/sma10-1)) + b2*totalMarginPct + b3*(-vol20); pooled OLS, in-sample',
+  fit30: { beta: fit30.beta, sigma: fit30.sigma, r2: fit30.r2, n: fit30.n },
+  fit90: { beta: fit90.beta, sigma: fit90.sigma, r2: fit90.r2, n: fit90.n },
+  bySeries: forecasts }, null, 1));
+console.log('forecasts:', Object.keys(forecasts).length);
+
 const z = (arr) => { const m = mean(arr), s = sd(arr) || 1; return (x) => (x - m) / s; };
 const zDemand = z(board.map(b => (b.recipeDownstream || 0) + (b.constructionDownstream || 0)));
 const zSupply = z(board.map(b => b.producerRecipes || 0));
