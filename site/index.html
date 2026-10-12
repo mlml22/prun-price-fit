@@ -66,6 +66,13 @@
   </section>
 
   <section>
+    <h2>游戏官方通胀指数（INFL）<span class="dim" id="inflWhen"></span></h2>
+    <div class="cards" id="inflCards"></div>
+    <div class="wrap" style="margin-top:10px"><table id="inflTable"><thead><tr><th>币种</th><th>口径</th><th>最新 level</th><th>最新一期</th><th>起点</th><th>点数</th></tr></thead><tbody></tbody></table></div>
+    <div class="note">数据来自游戏内 <code>INFL</code> 指令（游戏服务器消息 <code>INFLATION_INDEX_GET_DATA</code>），只读抓取后存档；level 以起点为 1.0000，rate 为该期涨跌幅。这是<b>官方口径</b>，和上面按 CX 价格中位数实测的通胀不同（官方篮子会包含波动更大的品种，所以通常更高）。</div>
+  </section>
+
+  <section>
     <h2>因子有效性（横截面 Spearman IC，滚动样本，含每年分解）</h2>
     <div class="wrap"><table id="fitTable"><thead><tr>
       <th>因子</th><th>期限</th><th>平均 IC</th><th>t</th><th>IC&gt;0</th><th>前 10% 收益</th><th>全市场</th><th>差</th><th>逐年</th>
@@ -123,6 +130,30 @@ const signCls = (x) => x == null ? '' : (x > 0 ? 'pos' : (x < 0 ? 'neg' : ''));
   inflNote.className = 'note';
   inflNote.innerHTML = '币种通胀 = 该交易所全部有成交商品的<b>中位数</b>价格涨幅（近 365 天），直接从价格实测，不用「印钞机」代理。看毛利时记得扣掉它：名义毛利 25% 在年通胀 22% 的货币里，实际只赚约 3%。';
   document.querySelector('#cards').parentElement.appendChild(inflNote);
+  // in-game official INFL index (captured read-only, stored in the repo)
+  try {
+    const ih = await fetch('infl/infl-history.json?v=' + ver).then(r => r.json());
+    const cur = ih.byCurrency || {};
+    document.getElementById('inflWhen').textContent = ih.lastCapturedAt ? ' · 上次抓取 ' + new Date(ih.lastCapturedAt).toLocaleString('zh-CN') : '';
+    const pct = (x) => x == null ? '—' : (x * 100).toFixed(2) + '%';
+    document.getElementById('inflCards').innerHTML = Object.entries(cur).map(([code, c]) => {
+      const m = (c.series && c.series.MONTH) || [];
+      const last = m[m.length - 1];
+      const ours = (inflation.byCurrency || {})[code];
+      const annualFromMonth = last ? ((1 + last[2]) ** 12 - 1) * 100 : null;
+      return `<div class="card"><div class="k">${code} 官方 INFL</div><div class="v">${last ? pct(last[2]) + '/月' : '—'}</div>` +
+        `<div class="dim" style="font-size:11.5px">年化约 ${annualFromMonth == null ? '—' : annualFromMonth.toFixed(0) + '%'} · level ${last ? last[1].toFixed(4) : '—'}<br>我们实测年通胀 ${ours && ours.annualInflationPct != null ? ours.annualInflationPct + '%' : '—'}</div></div>`;
+    }).join('');
+    const rows = [];
+    for (const [code, c] of Object.entries(cur)) {
+      for (const [iv, pts] of Object.entries(c.series || {})) {
+        const last = pts[pts.length - 1];
+        rows.push(`<tr><td>${code}</td><td>${iv === 'MONTH' ? '月' : iv === 'DAY' ? '日' : '年'}</td><td>${last ? last[1].toFixed(4) : '—'}</td><td>${last ? pct(last[2]) : '—'}</td><td class="dim">${pts.length ? new Date(pts[0][0]).toISOString().slice(0, 10) : '—'}</td><td>${pts.length}</td></tr>`);
+      }
+    }
+    document.querySelector('#inflTable tbody').innerHTML = rows.join('');
+  } catch (e) { /* panel is optional */ }
+
   document.querySelector('#fitTable tbody').innerHTML = fit.methods.map(m => `
     <tr>
       <td>${m.label}</td><td>${m.horizonDays}天</td>
