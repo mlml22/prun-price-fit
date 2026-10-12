@@ -73,6 +73,7 @@
 const $ = (s) => document.querySelector(s);
 const fmt = (x, d = 2) => (x == null || Number.isNaN(x)) ? '—' : Number(x).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 const int = (x) => (x == null) ? '—' : Number(x).toLocaleString('en-US');
+const signCls = (x) => (x == null ? '' : (x > 0 ? 'pos' : (x < 0 ? 'neg' : '')));
 const params = new URLSearchParams(location.search);
 const T = (params.get('t') || 'RAT').toUpperCase();
 let ZH = {};   // ticker -> Chinese name
