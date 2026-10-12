@@ -69,7 +69,7 @@
     <h2>原料（采掘类）供给与预测<span class="dim" id="rawWhen"></span></h2>
     <div class="note" style="margin-bottom:8px">原料由采掘建筑（RIG/EXT/COL）产出，没有上游配方成本；这里用社区统计站 <a href="https://prun.raylu.net/stats/" style="color:var(--acc)">prun.raylu.net</a> 的<b>月度产量/消耗量</b>来刻画供给，并用「产量过剩 + 供给增速 + 单位利润」的月度模型预测下个月方向。<b>供给过剩 → 价格下行</b>（全样本 IC −17.8%，原料样本 −23.4%）。</div>
     <input type="search" id="rawFilter" placeholder="过滤原料（代码/中文名）" style="margin-bottom:8px">
-    <div class="wrap"><table id="rawTable"><thead><tr><th>原料</th><th>月产量</th><th>月消耗</th><th>过剩%</th><th>供给增速</th><th>单位利润</th><th>月产值</th><th>模型预期(次月)</th></tr></thead><tbody></tbody></table></div>
+    <div class="wrap"><table id="rawTable"><thead><tr><th>原料</th><th>月产量</th><th>月消耗</th><th>过剩%</th><th>供给增速</th><th>单位利润</th><th>月产值</th><th>模型预期(次月)</th><th>采掘成本(最优行星)</th><th>行星数</th><th>最优丰度</th></tr></thead><tbody></tbody></table></div>
   </section>
 
   <section>
@@ -94,7 +94,7 @@
       <span class="sub" id="boardCount"></span>
     </div>
     <div class="wrap"><table id="boardTable"><thead><tr>
-      <th>商品（代码 / 英文名 / 中文名）</th><th>交易所</th><th>日期</th><th>价格</th><th>料成本</th><th>人工</th><th>折旧</th><th>毛利(扣全部成本)</th><th>年通胀</th><th>实际毛利</th><th>模型预期30天</th><th>跨所价差(对最低所)</th><th>供给面预期(月)</th><th>自身历史分位</th>
+      <th>商品（代码 / 英文名 / 中文名）</th><th>交易所</th><th>日期</th><th>价格</th><th>料成本</th><th>人工</th><th>折旧</th><th>毛利(扣全部成本 / 矿=采掘)</th><th>年通胀</th><th>实际毛利</th><th>模型预期30天</th><th>跨所价差(对最低所)</th><th>供给面预期(月)</th><th>自身历史分位</th>
       <th>配方下游</th><th>建造下游</th><th>可产配方</th><th>粘性</th><th>打分</th>
     </tr></thead><tbody></tbody></table></div>
     <div class="note">毛价差 = (价格 − 原料篮子成本) / 价格，<b>不含</b>人工与折旧；料成本用同交易所的最优配方推算。<b>粘性</b> = 需求广度(配方下游+建造下游) 减去 供给弹性(可产配方数)，标准化后取值。</div>
@@ -103,11 +103,13 @@
 <script>
 const fmt = (x, d = 2) => (x == null || Number.isNaN(x)) ? '—' : Number(x).toFixed(d);
 let ZH = {};   // ticker -> Chinese name, from the game client locale (materials-zh.json)
+let EX = {};   // ticker -> extraction cost anchor (extraction.json)
 const num = (x) => (x == null || x === '') ? '—' : Number(x).toLocaleString('en-US');
 const signCls = (x) => x == null ? '' : (x > 0 ? 'pos' : (x < 0 ? 'neg' : ''));
 (async () => {
   // cache-bust with the payload version (GitHub's CDN caches for 10 minutes)
   ZH = await fetch('materials-zh.json').then(r => r.json()).then(j => j.byTicker || {}).catch(() => ({}));
+  EX = await fetch('data/extraction.json').then(r => r.json()).then(j => j.byMaterial || {}).catch(() => ({}));
   const metaV = await fetch('data/meta.json?ts=' + Date.now()).then(r => r.json());
   const ver = encodeURIComponent(metaV.generatedAt || String(Date.now()));
   const [meta, fit, board, inflation] = await Promise.all([
@@ -155,7 +157,10 @@ const signCls = (x) => x == null ? '' : (x > 0 ? 'pos' : (x < 0 ? 'neg' : ''));
         <td class="${signCls(-(v.supplyGrowthPct || 0))}">${v.supplyGrowthPct == null ? '—' : fmt(v.supplyGrowthPct, 0) + '%'}</td>
         <td>${v.profitPerUnit == null ? '—' : fmt(v.profitPerUnit, 1)}</td>
         <td class="dim">${num(Math.round((v.volume || 0) / 1e6))}M</td>
-        <td class="${signCls(v.expectedNextMonthPct)}"><b>${v.expectedNextMonthPct == null ? '—' : (v.expectedNextMonthPct > 0 ? '+' : '') + fmt(v.expectedNextMonthPct, 1) + '%'}</b></td></tr>`).join('');
+        <td class="${signCls(v.expectedNextMonthPct)}"><b>${v.expectedNextMonthPct == null ? '—' : (v.expectedNextMonthPct > 0 ? '+' : '') + fmt(v.expectedNextMonthPct, 1) + '%'}</b></td>
+        <td>${EX[v.ticker] ? fmt(EX[v.ticker].costPerUnit, 1) + ' <span class="dim">(' + fmt(EX[v.ticker].marginPct, 0) + '%)</span>' : '—'}</td>
+        <td class="dim">${EX[v.ticker] ? EX[v.ticker].planets : '—'}</td>
+        <td class="dim">${EX[v.ticker] ? fmt(EX[v.ticker].bestFactor, 3) : '—'}</td></tr>`).join('');
     };
     paint();
     const rf = document.getElementById('rawFilter');
@@ -218,10 +223,10 @@ const signCls = (x) => x == null ? '' : (x > 0 ? 'pos' : (x < 0 ? 'neg' : ''));
         <td>${r.cx}</td>
         <td class="dim">${r.day}${r.daysAgo > 1 ? ` (+${r.daysAgo}d)` : ''}</td>
         <td>${num(r.price)}</td>
-        <td>${num(Math.round(r.matCost))}</td>
+        <td>${r.matCost != null ? num(Math.round(r.matCost)) : (r.extractCost != null ? '<span title="采掘成本（最优行星）">' + fmt(r.extractCost, 1) + ' <span class="dim">矿</span></span>' : '—')}</td>
         <td>${num(Math.round(r.labourCost))}</td>
         <td>${num(Math.round(r.depreciationCost))}</td>
-        <td class="${signCls(r.marginPct)}">${fmt(r.marginPct, 1)}%</td>
+        <td class="${signCls(r.marginPct != null ? r.marginPct : r.extractMarginPct)}">${r.marginPct != null ? fmt(r.marginPct, 1) + '%' : (r.extractMarginPct != null ? fmt(r.extractMarginPct, 1) + '% <span class="dim">矿</span>' : '—')}</td>
         <td class="dim">${r.inflationAnnualPct == null ? '—' : r.inflationAnnualPct + '%'}</td>
         <td class="${signCls(r.marginPct != null && r.inflationAnnualPct != null ? r.marginPct - r.inflationAnnualPct : null)}">${r.marginPct == null || r.inflationAnnualPct == null ? '—' : (r.marginPct - r.inflationAnnualPct).toFixed(1) + '%'}</td>
         <td class="${signCls(r.expected30Pct)}">${r.expected30Pct == null ? '—' : fmt(r.expected30Pct, 1) + '%'}</td>
