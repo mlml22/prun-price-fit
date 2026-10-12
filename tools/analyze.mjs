@@ -505,7 +505,13 @@ for (const m of rayMonths) {
   }
   for (const [t, arr] of ranks) supplyScoreMap.set(mk + '|' + t, arr.reduce((a, b2) => a + b2, 0) / arr.length);
 }
-const scoreFor = (t, d) => { const day = new Date(d); const mk = day.getUTCFullYear() + '-' + String(day.getUTCMonth() + 1).padStart(2, '0'); return supplyScoreMap.has(mk + '|' + t) ? supplyScoreMap.get(mk + '|' + t) : null; };
+const scoreFor = (t, d) => {
+  // use the row's own month; if that month has no raylu data yet (e.g. the current month),
+  // fall back to the most recent month that does (older information is never look-ahead)
+  const day = new Date(d); let y = day.getUTCFullYear(), mo = day.getUTCMonth();
+  for (let k = 0; k < 4; k++) { const mk = y + '-' + String(mo + 1).padStart(2, '0'); if (supplyScoreMap.has(mk + '|' + t)) return supplyScoreMap.get(mk + '|' + t); mo--; if (mo < 0) { mo = 11; y--; } }
+  return null;
+};
 
 for (const b of board) { const arr2 = bySeries.get(b.ticker + '|' + b.cx); const last2 = arr2 && arr2[arr2.length - 1]; b.supplyScore = last2 ? scoreFor(b.ticker, last2.d) : null; b.comboScore = (b.supplyScore != null && last2 && last2.sma10) ? (+((( -(last2.c / last2.sma10 - 1)) * 100 + (b.supplyScore - 50))).toFixed(1)) : null; }
 console.log('supply scores built for', supplyScoreMap.size, 'month-ticker pairs');
