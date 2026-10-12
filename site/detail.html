@@ -72,6 +72,7 @@ const fmt = (x, d = 2) => (x == null || Number.isNaN(x)) ? '—' : Number(x).toL
 const int = (x) => (x == null) ? '—' : Number(x).toLocaleString('en-US');
 const params = new URLSearchParams(location.search);
 const T = (params.get('t') || 'RAT').toUpperCase();
+let ZH = {};   // ticker -> Chinese name
 
 let DATA = null, BOARD = null, FORECAST = null, FREIGHT = null, FC = null, cxList = [], cx = params.get('cx'), view = null, hover = null;
 const FUTURE_FRAC = 0.18;   // share of the plot width reserved for the model's forward path
@@ -250,6 +251,7 @@ function breakdownHtml(row) {
   const [hres, bres] = await Promise.all([fetch(`data/hist/${T}.json.gz?v=${ver}`), fetch('data/board.json?v=' + ver)]);
   const json = JSON.parse(await new Response(hres.body.pipeThrough(new DecompressionStream('gzip'))).text());
   BOARD = await bres.json();
+  ZH = await fetch('materials-zh.json').then(r => r.json()).then(j => j.byTicker || {}).catch(() => ({}));
   FREIGHT = await fetch('data/freight.json?v=' + ver).then(r => r.json()).catch(() => null);
   const fcRes = await fetch('data/forecast.json?v=' + ver).then(r => r.json()).catch(() => null);
   FORECAST = fcRes;
@@ -259,8 +261,8 @@ function breakdownHtml(row) {
   if (!cx || !DATA.series[cx]) cx = cxList[0];
   const list = BOARD.rows.filter(r => r.ticker === T);
   const any = list[0] || {};
-  $('#title').innerHTML = `${T} <span class="dim">${any.name || ''}</span> <a href="index.html">← 返回看板</a>`;
-  $('#subtitle').textContent = `${any.category || ''} · 上游 PRUNplanner/FIO 日线 · ${cxList.length} 个交易所 · 图上蜡烛为日线 OHLC，蓝线为 10 日均线，下方柱为成交额`;
+  $('#title').innerHTML = `${T} <span class="dim">${any.name || ''}</span> ${ZH[T] ? '<b>' + ZH[T] + '</b>' : ''} <a href="index.html">← 返回看板</a>`;
+  $('#subtitle').textContent = `${ZH[T] ? ZH[T] + ' · ' : ''}${any.category || ''} · 上游 PRUNplanner/FIO 日线 · ${cxList.length} 个交易所 · 图上蜡烛为日线 OHLC，蓝线为 10 日均线，下方柱为成交额`;
   $('#tabs').innerHTML = cxList.map(c => `<button class="tab ${c === cx ? 'on' : ''}" data-cx="${c}">${c}</button>`).join('');
   document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => {
     cx = b.dataset.cx;
