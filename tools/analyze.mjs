@@ -9,6 +9,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 import { workersOf, dailyWorkforceCost, DAY_MS } from './baskets.mjs';
 import { TRIP_COST, TRIP_COST_SOURCE, breakEvenUnits } from './transport.mjs';
 import { loadRaylu, monthKey, rawSet } from './raylu.mjs';
+import { extractionCostPerUnit, UNITS_PER_DAY_AT_FACTOR_1 } from './extraction.mjs';
 
 const DATA = path.join(ROOT, 'data');
 const SITE = path.join(ROOT, 'site', 'data');
@@ -234,10 +235,12 @@ console.log('forecast model r90: r2=' + (fit90.r2 * 100).toFixed(2) + '% sigma='
 const CACHE = path.join(ROOT, 'cache');
 const RAYLU = await loadRaylu(CACHE);
 let RAW_SET = new Set();
+let PLANETS = [];
 let RECIPES = [], BUILDINGS = [];
 try { RECIPES = JSON.parse(fs.readFileSync(path.join(CACHE, 'recipes.json'), 'utf8')); } catch { /* optional */ }
 try { BUILDINGS = JSON.parse(fs.readFileSync(path.join(CACHE, 'buildings.json'), 'utf8')); } catch { /* optional */ }
 RAW_SET = rawSet(RECIPES);
+try { PLANETS = JSON.parse(fs.readFileSync(path.join(CACHE, 'planets.json'), 'utf8')); } catch { /* optional */ }
 const buildingOfWork = new Map(BUILDINGS.map(b => [b.building_ticker, b]));
 const recipesByOutput = new Map();
 for (const r of RECIPES) {
@@ -404,6 +407,43 @@ for (const [t, v] of Object.entries(RAYLU[lastMonth] || {})) {
 for (const b of board) { const s = supply[b.ticker]; if (s) { b.supplySurplusPct = s.surplus; b.supplyGrowthPct = s.supplyGrowthPct; b.supplyExpectedPct = s.expectedNextMonthPct; b.isRaw = s.raw; } }
 fs.writeFileSync(path.join(SITE, 'supply.json'), JSON.stringify({ generatedAt: new Date().toISOString(), month: lastMonth, model: 'next-month log return = a + b1*surplus + b2*supplyGrowth + b3*profitPerUnit (monthly panel, in-sample)', fit: supplyFit, note: 'surplus = (产量 - 消耗) / max(产量, 消耗)；raw = 不由任何消耗型配方生产的材料（采掘类）', byTicker: supply }, null, 1));
 console.log('supply rows:', Object.keys(supply).length, '| raw:', Object.values(supply).filter(x => x.raw).length);
+
+// ---- extraction cost anchor for mined materials ----
+const factorByMaterial = new Map();
+for (const p of PLANETS) for (const r of (p.resources || [])) {
+  const t = r.material_ticker || r.materialTicker; if (!t || !(r.factor > 0)) continue;
+  if (!factorByMaterial.has(t)) factorByMaterial.set(t, []);
+  factorByMaterial.get(t).push({ planet: p.planet_natural_id, factor: r.factor });
+}
+const extraction = {};
+for (const [t, list] of factorByMaterial) {
+  if (!RAW_SET.has(t) && !list.length) continue;
+  const sorted = list.slice().sort((a, b2) => b2.factor - a.factor);
+  const best = sorted[0];
+  const mid = sorted[Math.floor(sorted.length / 2)];
+  const latest = (bySeries.get(t + '|NC1') || bySeries.get(t + '|AI1') || bySeries.get(t + '|CI1') || bySeries.get(t + '|IC1') || []);
+  const last = latest[latest.length - 1];
+  if (!last) continue;
+  const priceOf = (mat) => { for (const cx2 of ['NC1', 'AI1', 'CI1', 'IC1']) { const arr2 = bySeries.get(mat + '|' + cx2); if (arr2 && arr2.length) return arr2[arr2.length - 1].c; } return null; };
+  const pick = (building) => {
+    const b = extractionCostPerUnit(building, best.factor, priceOf) || extractionCostPerUnit(building, mid.factor, priceOf);
+    return b;
+  };
+  const rig = pick('RIG'), ext = pick('EXT'), col = pick('COL');
+  const options = [['RIG', rig], ['EXT', ext], ['COL', col]].filter(x => x[1]);
+  if (!options.length) continue;
+  const bestOpt = options.slice().sort((a, b2) => a[1].perUnit - b2[1].perUnit)[0];
+  extraction[t] = { ticker: t, raw: !RAW_SET.has(t), price: last.c, planets: sorted.length,
+    bestPlanet: best.planet, bestFactor: +best.factor.toFixed(3), midFactor: +mid.factor.toFixed(3),
+    building: bestOpt[0], unitsPerDay: +bestOpt[1].unitsPerDay.toFixed(1), labour: +bestOpt[1].labour.toFixed(1), wear: +bestOpt[1].wear.toFixed(1),
+    costPerUnit: +bestOpt[1].perUnit.toFixed(2), marginPct: +(((last.c - bestOpt[1].perUnit) / last.c) * 100).toFixed(1),
+    costAtMidFactor: +(bestOpt[1].total / (UNITS_PER_DAY_AT_FACTOR_1 * mid.factor)).toFixed(2) };
+}
+for (const b of board) { const e2 = extraction[b.ticker]; if (e2) { b.extractCost = e2.costPerUnit; b.extractMarginPct = e2.marginPct; b.bestFactor = e2.bestFactor; b.planets = e2.planets; } }
+fs.writeFileSync(path.join(SITE, 'extraction.json'), JSON.stringify({ generatedAt: new Date().toISOString(),
+  model: 'units/day = 70 x planet factor (calibrated from the account\'s own RIG/EXT extraction orders); daily cost = workforce consumables + building wear',
+  buildings: { RIG: '30 pioneers', EXT: '60 pioneers', COL: '50 pioneers' }, byMaterial: extraction }, null, 1));
+console.log('extraction anchors:', Object.keys(extraction).length, '| raw with cost:', Object.values(extraction).filter(x => x.raw).length);
 
 const z = (arr) => { const m = mean(arr), s = sd(arr) || 1; return (x) => (x - m) / s; };
 const zDemand = z(board.map(b => (b.recipeDownstream || 0) + (b.constructionDownstream || 0)));
