@@ -54,6 +54,7 @@
     <span class="dim" id="hint">滚轮缩放 · 拖拽平移 · 双击复位</span>
   </div>
   <div class="wrap"><canvas id="cv"></canvas><div class="tip" id="tip"></div></div>
+  <div class="note" id="fcNote"></div>
 
   <div class="cards" id="cards"></div>
 
@@ -68,7 +69,8 @@ const int = (x) => (x == null) ? '—' : Number(x).toLocaleString('en-US');
 const params = new URLSearchParams(location.search);
 const T = (params.get('t') || 'RAT').toUpperCase();
 
-let DATA = null, BOARD = null, cxList = [], cx = params.get('cx'), view = null, hover = null;
+let DATA = null, BOARD = null, FORECAST = null, FC = null, cxList = [], cx = params.get('cx'), view = null, hover = null;
+const FUTURE_FRAC = 0.18;   // share of the plot width reserved for the model's forward path
 
 const cv = $('#cv'), ctx = cv.getContext('2d');
 function resize() {
@@ -94,12 +96,21 @@ function draw() {
   const i0 = view ? view.i0 : 0, i1 = view ? view.i1 : r.length - 1;
   const slice = r.slice(i0, i1 + 1);
   const ma = sma(r, 10).slice(i0, i1 + 1);
+  const fc = FC || null;
+  const lastC0 = r[r.length - 1][4];
   const padL = 8, padR = 58, padT = 10, padB = 52;
   const volH = 56, chartH = h - padT - padB - volH - 6;
   let hi = -Infinity, lo = Infinity, maxV = 0;
   for (const k of slice) { hi = Math.max(hi, k[2]); lo = Math.min(lo, k[3]); maxV = Math.max(maxV, k[5]); }
+  if (fc) {
+    const e30 = Math.exp((fc.expected30Pct || 0) / 100), e90 = Math.exp((fc.expected90Pct || 0) / 100);
+    const b90 = Math.exp((fc.band90Pct || 0) / 100);
+    hi = Math.max(hi, lastC0 * e90 * b90); lo = Math.min(lo, lastC0 * e90 / b90);
+  }
   const span = (hi - lo) || 1; hi += span * 0.06; lo -= span * 0.06;
-  const X = (i) => padL + (w - padL - padR) * (i / Math.max(1, slice.length - 1));
+  const plotW = (w - padL - padR) * (1 - FUTURE_FRAC);
+  const X = (i) => padL + plotW * (i / Math.max(1, slice.length - 1));
+  const XF = (days) => padL + plotW + plotW * FUTURE_FRAC * (days / 90);
   const Y = (p) => padT + chartH - chartH * (p - lo) / (hi - lo);
   const VY = (v) => padT + chartH + 6 + volH - volH * (v / (maxV || 1));
 
@@ -136,6 +147,23 @@ function draw() {
   for (let i = 0; i < slice.length; i += step) {
     const d = new Date(slice[i][0]).toISOString().slice(0, 10);
     ctx.fillText(d, Math.min(X(i) - 18, w - padR - 60), h - 8);
+  }
+  // model forecast path (dashed) + one-sigma band
+  if (fc) {
+    const e30 = Math.exp((fc.expected30Pct || 0) / 100), e90 = Math.exp((fc.expected90Pct || 0) / 100);
+    const b30 = Math.exp((fc.band30Pct || 0) / 100), b90 = Math.exp((fc.band90Pct || 0) / 100);
+    const x0 = X(slice.length - 1), y0 = Y(lastC0);
+    const x30 = XF(30), y30 = Y(lastC0 * e30);
+    const x90 = XF(90), y90 = Y(lastC0 * e90);
+    ctx.fillStyle = 'rgba(245,158,11,0.13)';
+    ctx.beginPath();
+    ctx.moveTo(x0, y0); ctx.lineTo(x30, Y(lastC0 * e30 * b30)); ctx.lineTo(x90, Y(lastC0 * e90 * b90));
+    ctx.lineTo(x90, Y(lastC0 * e90 / b90)); ctx.lineTo(x30, Y(lastC0 * e30 / b30)); ctx.closePath(); ctx.fill();
+    ctx.save(); ctx.setLineDash([6, 5]); ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x30, y30); ctx.lineTo(x90, y90); ctx.stroke(); ctx.restore();
+    ctx.fillStyle = '#f59e0b';
+    ctx.fillText('模型 30天 ' + ((fc.expected30Pct || 0) > 0 ? '+' : '') + (fc.expected30Pct || 0).toFixed(1) + '%', Math.min(x30 + 4, w - padR - 92), y30 - 4);
+    ctx.fillText('90天 ' + ((fc.expected90Pct || 0) > 0 ? '+' : '') + (fc.expected90Pct || 0).toFixed(1) + '%', Math.min(x90 + 4, w - padR - 72), y90 - 4);
   }
   // last close reference
   const lastC = slice[slice.length - 1][4];
@@ -218,6 +246,9 @@ function breakdownHtml(row) {
   const [hres, bres] = await Promise.all([fetch(`data/hist/${T}.json.gz?v=${ver}`), fetch('data/board.json?v=' + ver)]);
   const json = JSON.parse(await new Response(hres.body.pipeThrough(new DecompressionStream('gzip'))).text());
   BOARD = await bres.json();
+  const fcRes = await fetch('data/forecast.json?v=' + ver).then(r => r.json()).catch(() => null);
+  FORECAST = fcRes;
+  FC = (fcRes && fcRes.bySeries && fcRes.bySeries[T + '|' + cx]) || null;
   DATA = json;
   cxList = Object.keys(DATA.series).sort();
   if (!cx || !DATA.series[cx]) cx = cxList[0];
@@ -229,11 +260,15 @@ function breakdownHtml(row) {
   document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => {
     cx = b.dataset.cx;
     document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x.dataset.cx === cx));
+    FC = (FORECAST && FORECAST.bySeries && FORECAST.bySeries[T + '|' + cx]) || null;
     setRange(0); renderCards(); renderBreakdown();
   }));
   const row = BOARD.rows.find(r => r.ticker === T && r.cx === cx);
   $('#breakdown').innerHTML = breakdownHtml(row);
   $('#bnote').textContent = '人工成本 = Σ(该建筑各层级工人数/100 × 该层级「每 100 人每日消耗品篮子」) × 生产时长 ÷ 产出数量。先驱/定居者篮子已与官方手册核对；技术员/工程师/科学家篮子取自游戏自带的 PAC 人口配方（÷10 折算成日）；不含建筑折旧与税费。';
+  if (FORECAST && FORECAST.fit30) {
+    $('#fcNote').innerHTML = '虚线 = 拟合模型给出的<b>价格路径预期</b>（r = a + b1×离 10 日均线距离 + b2×总毛利率 + b3×低波动），阴影 = ±1σ 残差区间。样本内拟合：30 天 R² ' + (FORECAST.fit30.r2 * 100).toFixed(1) + '%、σ ' + (FORECAST.fit30.sigma * 100).toFixed(1) + '%；90 天 R² ' + (FORECAST.fit90.r2 * 100).toFixed(1) + '%、σ ' + (FORECAST.fit90.sigma * 100).toFixed(1) + '%。不是投资建议，残差很大。';
+  }
   renderCards();
   setRange(0);
   resize();
@@ -246,6 +281,8 @@ function renderCards() {
     ['最新价', fmt(row.price)], ['原料成本', fmt(row.matCost)], ['人工成本', fmt(row.labourCost)],
     ['毛利（扣人工后）', (row.marginPct == null ? '—' : row.marginPct + '%')], ['自身历史分位', row.marginPctile == null ? '—' : row.marginPctile + '%'],
     ['30 天成交额', int(row.tradedMoney30d)], ['距 10 日均线', row.below10dMeanPct == null ? '—' : row.below10dMeanPct + '%'],
+    ['模型预期 30 天', FC ? ((FC.expected30Pct > 0 ? '+' : '') + FC.expected30Pct + '% ±' + FC.band30Pct + '%') : '—'],
+    ['模型预期 90 天', FC ? ((FC.expected90Pct > 0 ? '+' : '') + FC.expected90Pct + '% ±' + FC.band90Pct + '%') : '—'],
   ].map(([k, v]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
 }
 function renderBreakdown() {
