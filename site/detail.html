@@ -314,7 +314,7 @@ function renderSupply() {
     <td class="${signCls(-(s.supplyGrowthPct || 0))}">${s.supplyGrowthPct == null ? '—' : fmt(s.supplyGrowthPct, 0) + '%'}</td>
     <td>${s.profitPerUnit == null ? '—' : fmt(s.profitPerUnit, 1)}</td><td class="dim">${int(Math.round((s.volume || 0) / 1e6))}M</td>
     <td class="${signCls(s.expectedNextMonthPct)}"><b>${s.expectedNextMonthPct == null ? '—' : (s.expectedNextMonthPct > 0 ? '+' : '') + fmt(s.expectedNextMonthPct, 1) + '%'}</b></td></tr></tbody></table>
-    <div class="note">数据：prun.raylu.net 月度产能统计${s.raw ? ' · <b>该商品属于采掘类</b>（无上游配方成本）' : ''}。模型：次月收益 = a + b1×过剩 + b2×供给增速 + b3×单位利润（月度面板，样本内 R² ${SUPPLY.fit ? (SUPPLY.fit.r2 * 100).toFixed(1) : '—'}%）。</div>`;
+    <div class="note">数据：prun.raylu.net 月度产能统计${s.raw ? ' · <b>该商品属于采掘类</b>（无上游配方成本）' : ''}。模型：次月收益 = a + b1×过剩 + b2×供给增速 + b3×单位利润（月度面板，样本内 R² ${SUPPLY.fit ? (SUPPLY.fit.r2 * 100).toFixed(1) : '—'}%）。采掘毛利率单独作为因子时 IC −36.7%（18 个月全为负），比上面前三个都强，但样本只有 600 条、OLS 系数不稳，所以仅作方向参考、不进期望值。</div>`;
 }
 function renderFreight() {
   const box = $('#freight'), note = $('#fnote');
