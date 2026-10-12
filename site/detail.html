@@ -337,6 +337,7 @@ function renderCards() {
     ['毛利（扣人工后）', (row.marginPct == null ? '—' : row.marginPct + '%')], ['自身历史分位', row.marginPctile == null ? '—' : row.marginPctile + '%'],
     ['30 天成交额', int(row.tradedMoney30d)], ['距 10 日均线', row.below10dMeanPct == null ? '—' : row.below10dMeanPct + '%'],
     ['模型预期 30 天', FC ? ((FC.expected30Pct > 0 ? '+' : '') + FC.expected30Pct + '% ±' + FC.band30Pct + '%') : '—'],
+    ['综合信号(日+月)', row.comboScore == null ? '—' : fmt(row.comboScore, 1) + '（供给分 ' + fmt(row.supplyScore, 0) + '）'],
     ['供给过剩(月)', (SUPPLY && SUPPLY.byTicker && SUPPLY.byTicker[T] && SUPPLY.byTicker[T].surplus != null) ? SUPPLY.byTicker[T].surplus + '%' : '—'],
     ['供给面预期(次月)', (SUPPLY && SUPPLY.byTicker && SUPPLY.byTicker[T] && SUPPLY.byTicker[T].expectedNextMonthPct != null) ? ((SUPPLY.byTicker[T].expectedNextMonthPct > 0 ? '+' : '') + SUPPLY.byTicker[T].expectedNextMonthPct + '%') : '—'],
     ['模型预期 90 天', FC ? ((FC.expected90Pct > 0 ? '+' : '') + FC.expected90Pct + '% ±' + FC.band90Pct + '%') : '—'],
