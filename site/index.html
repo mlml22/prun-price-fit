@@ -91,11 +91,14 @@ const fmt = (x, d = 2) => (x == null || Number.isNaN(x)) ? '—' : Number(x).toF
 const num = (x) => (x == null || x === '') ? '—' : Number(x).toLocaleString('en-US');
 const signCls = (x) => x == null ? '' : (x > 0 ? 'pos' : (x < 0 ? 'neg' : ''));
 (async () => {
+  // cache-bust with the payload version (GitHub's CDN caches for 10 minutes)
+  const metaV = await fetch('data/meta.json?ts=' + Date.now()).then(r => r.json());
+  const ver = encodeURIComponent(metaV.generatedAt || String(Date.now()));
   const [meta, fit, board, inflation] = await Promise.all([
-    fetch('data/meta.json').then(r => r.json()),
-    fetch('data/fit.json').then(r => r.json()),
-    fetch('data/board.json').then(r => r.json()),
-    fetch('data/inflation.json').then(r => r.json()).catch(() => ({ byCurrency: {} })),
+    Promise.resolve(metaV),
+    fetch('data/fit.json?v=' + ver).then(r => r.json()),
+    fetch('data/board.json?v=' + ver).then(r => r.json()),
+    fetch('data/inflation.json?v=' + ver).then(r => r.json()).catch(() => ({ byCurrency: {} })),
   ]);
   const h = meta.history || {};
   document.getElementById('headline').innerHTML =
