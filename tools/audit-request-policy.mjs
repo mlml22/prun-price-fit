@@ -19,10 +19,14 @@ if (!pull.includes("BASE + '?days=3'")) fail('daily path must use the bulk ?days
 if (/cxpc\/\$\{|cxpc\/[^'\"]*\+/.test(pull)) fail('per-ticker cxpc URL construction detected');
 if (!pull.includes('request budget exhausted before request')) fail('pre-request budget fuse is missing');
 if (!pull.includes('refusing automatic backfill')) fail('automatic backfill guard is missing');
+const budgetMatch = pull.match(/MAX_REQUESTS\s*=\s*MODE === 'backfill' \? 250 : (\d+)/);
+if (!budgetMatch || Number(budgetMatch[1]) !== 1) fail('daily request budget must be exactly 1');
+if (!pull.includes('Single-attempt policy')) fail('single-attempt policy marker is missing');
+if (/for\s*\([^)]*tries/i.test(pull) || /await\s+sleep\s*\(\s*wait/.test(pull) || /catch\s*\([^)]*\)\s*\{[\s\S]{0,240}await\s+sleep/.test(pull)) fail('automatic retry logic detected');
 
 const dailyModules = ['tools/build-dataset.mjs', 'tools/analyze.mjs', 'tools/raylu.mjs'];
 for (const rel of dailyModules) {
   if (/\bfetch\s*\(/.test(read(rel))) fail(`${rel} must not perform network fetches in the scheduled pipeline`);
 }
 
-console.log(`request policy OK: cron=[${crons[0]}], one workflow pull, one allowed fetch call site, ?days=3 bulk path, budget fuse present`);
+console.log(`request policy OK: cron=[${crons[0]}], one workflow pull, one allowed fetch call site, ?days=3 bulk path, budget=1 and no-retry policy present`);
