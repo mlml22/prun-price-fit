@@ -210,11 +210,8 @@ if (!RECIPES.length) try { RECIPES = JSON.parse(fs.readFileSync(path.join(CACHE,
 if (!BUILDINGS.length) try { BUILDINGS = JSON.parse(fs.readFileSync(path.join(CACHE, 'buildings.json'), 'utf8')); } catch { /* optional */ }
 RAW_SET = rawSet(RECIPES);
 PLANETS = readStatic('planets') || null;
-if (!PLANETS) try { PLANETS = JSON.parse(fs.readFileSync(path.join(CACHE, 'planets.json'), 'utf8')); }
-catch {
-  if (!PLANETS) { const r = await fetch('https://api.prunplanner.org/data/planets/', { headers: { 'User-Agent': 'prun-price-fit/1.0' } }); if (r.status === 200) { PLANETS = await r.json(); fs.writeFileSync(path.join(CACHE, 'planets.json'), JSON.stringify(PLANETS)); } }
-}
-if (!PLANETS) PLANETS = [];
+if (!PLANETS) try { PLANETS = JSON.parse(fs.readFileSync(path.join(CACHE, 'planets.json'), 'utf8')); } catch { /* optional */ }
+if (!PLANETS) throw new Error('missing static data: data/static/planets.json');
 const buildingOfWork = new Map(BUILDINGS.map(b => [b.building_ticker, b]));
 const recipesByOutput = new Map();
 for (const r of RECIPES) {
@@ -646,7 +643,7 @@ fs.writeFileSync(path.join(SITE, 'meta.json'), JSON.stringify({
   medianMaterialsCostShare: +(med(withLab.map(b => b.matCost / b.price)) * 100).toFixed(1),
   medianLabourCostShare: +(med(withLab.map(b => b.labourCost / b.price)) * 100).toFixed(1),
   boardSize: board.length, histFiles: fs.readdirSync(HIST).length,
-  sources: ['https://api.prunplanner.org/data/cxpc/daily/', 'https://api.prunplanner.org/data/recipes/', 'https://api.prunplanner.org/data/buildings/', 'https://api.prunplanner.org/data/materials/'],
+  sources: ['https://api.prunplanner.org/data/cxpc/daily/ (only network source in the daily run)', 'repository snapshots: recipes, buildings, materials, planets, monthly supply'],
 }, null, 1));
 console.log('fit rows:', methods.length, 'board:', board.length, 'meta written');
 console.log('cost shares (median): materials', (med(withLab.map(b => b.matCost / b.price)) * 100).toFixed(1) + '%, labour', (med(withLab.map(b => b.labourCost / b.price)) * 100).toFixed(1) + '%');
