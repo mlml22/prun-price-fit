@@ -26,7 +26,7 @@ jobs:
           node-version: "22"
       - name: audit request policy before any network call
         run: node tools/audit-request-policy.mjs
-      - name: pull daily slice (one bulk request)
+      - name: pull daily slice (one bulk request, no retries)
         run: node tools/pull-cxpc.mjs
       - name: commit history if it changed
         run: |
