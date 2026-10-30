@@ -24,6 +24,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: audit request policy before any network call
+        run: node tools/audit-request-policy.mjs
       - name: pull daily slice (one bulk request)
         run: node tools/pull-cxpc.mjs
       - name: commit history if it changed
