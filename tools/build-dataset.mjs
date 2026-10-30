@@ -17,6 +17,9 @@ import { repairPerDay } from './depreciation.mjs';
 
 
 async function gameData(name, url) {
+  // committed static game data first (no network on a daily run)
+  const s = path.join(ROOT, 'data', 'static', name + '.json');
+  try { return JSON.parse(fs.readFileSync(s, 'utf8')); } catch { /* fall through */ }
   const f = path.join(CACHE, name + '.json');
   try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { /* fetch */ }
   const r = await fetch(url, { headers: UA });
