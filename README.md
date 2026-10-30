@@ -90,7 +90,7 @@ The API author asked for gentler traffic. The puller therefore:
   merges the 3-day slice into the current month file and rebuilds the combined data file; old months never change.
 - sends a contactable User-Agent: `prun-price-fit/1.0 (https://github.com/mlml22/prun-price-fit)`.
 - makes sequential requests with a 1.5 s pause and honours `Retry-After` on 429/5xx.
-- runs **once a day** (08:08 Beijing = 00:08 UTC).
+- runs **once a day** (08:08 Beijing = 00:08 UTC). Before any network call, `tools/audit-request-policy.mjs` verifies there is exactly one cron, one workflow pull, one allowed `fetch` call site, the `?days=3` bulk path, and a pre-request budget fuse.
 - the only outbound network request in the scheduled pipeline is the bulk `/data/cxpc/daily/` request. Recipes, buildings, materials, planets and monthly supply flows are committed static snapshots, so CI cannot fan out to other APIs.
 
 Backfill is **manual-only** and must never run inside the scheduled workflow. If `data/history/` is unexpectedly empty, the daily command fails before making any request. Manual backfill pages `since`/`until` in <=31-day windows per exchange:
