@@ -42,6 +42,9 @@ const monthOf = (epoch) => new Date(epoch).toISOString().slice(0, 7);
 
 async function fetchJson(url, tries = 4) {
   for (let i = 1; i <= tries; i++) {
+    if (REQUESTS >= MAX_REQUESTS) {
+      throw new Error(`request budget exhausted before request ${REQUESTS + 1}/${MAX_REQUESTS}`);
+    }
     REQUESTS++;
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 180000);
@@ -173,11 +176,9 @@ async function main() {
   if (MODE === 'backfill') { await backfill(); return rebuild(); }
   const months = fs.readdirSync(HIST).filter((f) => /^\d{4}-\d{2}\.jsonl\.gz$/.test(f));
   if (!months.length) {
-    console.log('history is empty -> backfill first');
-    await backfill();
-  } else {
-    await incremental();
+    throw new Error('history is empty; refusing automatic backfill in a daily run. Run `node tools/pull-cxpc.mjs --backfill` manually, then commit data/history/.');
   }
+  await incremental();
   return rebuild();
   } finally {
     console.log(`requests used: ${REQUESTS} (budget ${MAX_REQUESTS})`);
