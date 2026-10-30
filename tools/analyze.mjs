@@ -643,7 +643,7 @@ fs.writeFileSync(path.join(SITE, 'meta.json'), JSON.stringify({
   medianMaterialsCostShare: +(med(withLab.map(b => b.matCost / b.price)) * 100).toFixed(1),
   medianLabourCostShare: +(med(withLab.map(b => b.labourCost / b.price)) * 100).toFixed(1),
   boardSize: board.length, histFiles: fs.readdirSync(HIST).length,
-  sources: ['https://api.prunplanner.org/data/cxpc/daily/ (only network source in the daily run)', 'repository snapshots: recipes, buildings, materials, planets, monthly supply'],
+  sources: ['https://api.prunplanner.org/data/cxpc/daily/ (only network source; one request per day, no retries)', 'repository snapshots: recipes, buildings, materials, planets, monthly supply'],
 }, null, 1));
 console.log('fit rows:', methods.length, 'board:', board.length, 'meta written');
 console.log('cost shares (median): materials', (med(withLab.map(b => b.matCost / b.price)) * 100).toFixed(1) + '%, labour', (med(withLab.map(b => b.labourCost / b.price)) * 100).toFixed(1) + '%');
