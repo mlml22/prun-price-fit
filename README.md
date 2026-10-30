@@ -91,6 +91,7 @@ The API author asked for gentler traffic. The puller therefore:
 - sends a contactable User-Agent: `prun-price-fit/1.0 (https://github.com/mlml22/prun-price-fit)`.
 - makes sequential requests with a 1.5 s pause and honours `Retry-After` on 429/5xx.
 - runs **once a day** (08:08 Beijing = 00:08 UTC).
+- the only outbound network request in the scheduled pipeline is the bulk `/data/cxpc/daily/` request. Recipes, buildings, materials, planets and monthly supply flows are committed static snapshots, so CI cannot fan out to other APIs.
 
 Backfill (rare, only when `data/history/` is empty) pages `since`/`until` in <=31-day windows per exchange:
 
@@ -118,13 +119,14 @@ mean-reversion stays the primary signal and the supply score is used as context,
 |---|---|---|
 | `https://api.prunplanner.org/data/cxpc/daily/` | daily OHLCV, **bulk** (`?days=3`, all exchanges) | **the only network call on a daily run** |
 | `https://api.prunplanner.org/data/recipes/`, `/buildings/`, `/materials/`, `/planets/` | game structure | committed under `data/static/`, refreshed manually only |
-| `https://prun.raylu.net/stats/data/prod-data-<month>.json` | monthly production / consumption / profit | once a day, cached 20 h (third-party site, not the PRUNplanner API) |
+| `data/static/raylu-prod.json` (originally from `prun.raylu.net`) | monthly production / consumption / profit | **committed frozen snapshot; manual refresh only** |
 | `https://handbook.apex.prosperousuniverse.com/wiki/efficiency-factors/` | official workforce consumables | documentation reference only |
 
 PRUNplanner documents a limit of **30 requests per minute per IP** on `cxpc/daily`, and notes that
 one request per exchange is enough for a daily refresh. This repo uses **one request per day** and a
 hard budget of 10 requests per run (`tools/pull-cxpc.mjs`), so a regression to per-ticker fetching
-fails CI instead of hammering the API.
+fails CI instead of hammering the API. Static snapshots can be refreshed manually; for example,
+`node tools/pull-raylu.mjs` refreshes the auxiliary monthly supply file without adding work to CI.
 
 ## Honest caveats
 
