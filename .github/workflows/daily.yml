@@ -1,15 +1,15 @@
 name: daily-fit
 
-# 08:08 and 20:08 Beijing time (= 00:08 / 12:08 UTC).
-# Manual runs never share a concurrency group with scheduled runs, so a manual
-# refresh can never cancel or queue-block an automatic one; deployments serialise.
+# Once a day at 08:08 Beijing time (00:08 UTC).
+# The PRUNplanner API author asked for gentle usage: one bulk request per day
+# (/data/cxpc/daily/?days=3) instead of 370 per-ticker requests.
 on:
   schedule:
-    - cron: "8 0,12 * * *"
+    - cron: "8 0 * * *"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write      # needed to commit the monthly history file
   pages: write
   id-token: write
 
@@ -24,8 +24,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: pull upstream history (read-only)
+      - name: pull daily slice (one bulk request)
         run: node tools/pull-cxpc.mjs
+      - name: commit history if it changed
+        run: |
+          git config user.name "prun-price-fit-bot"
+          git config user.email "mlml22@users.noreply.github.com"
+          git add data/history
+          if git diff --cached --quiet; then
+            echo "no history change"
+          else
+            git commit -m "history: $(date -u +%F)"
+            git push
+          fi
       - name: build dataset
         run: node tools/build-dataset.mjs
       - name: fit + emit site payload
