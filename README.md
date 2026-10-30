@@ -79,6 +79,27 @@ a median across traded materials. As of 2026-10-12:
 | ICA | +2.84% | ~40%/yr | 29.9% |
 | NCC | +3.84% | ~57%/yr | 24.3% |
 
+
+## Polite API usage (per the PRUNplanner API author's request)
+
+The API author asked for gentler traffic. The puller therefore:
+
+- fetches **one bulk request per day**: `GET /data/cxpc/daily/?days=3` (all exchanges, ~1.5k rows),
+  instead of 370 per-ticker requests. That is **1 request/day instead of ~740**.
+- keeps history as **monthly files** in `data/history/YYYY-MM.jsonl.gz` (committed). The daily job
+  merges the 3-day slice into the current month file and rebuilds the combined data file; old months never change.
+- sends a contactable User-Agent: `prun-price-fit/1.0 (https://github.com/mlml22/prun-price-fit)`.
+- makes sequential requests with a 1.5 s pause and honours `Retry-After` on 429/5xx.
+- runs **once a day** (08:08 Beijing = 00:08 UTC).
+
+Backfill (rare, only when `data/history/` is empty) pages `since`/`until` in <=31-day windows per exchange:
+
+```bash
+node tools/pull-cxpc.mjs --backfill   # paged, sequential, ~150 requests total
+node tools/pull-cxpc.mjs --rebuild    # rebuild data/cxpc-daily.jsonl.gz from month files
+node tools/pull-cxpc.mjs              # daily incremental (default)
+```
+
 ## Data sources (public, no auth)
 
 - `https://api.prunplanner.org/data/cxpc/{TICKER}/` - daily OHLCV history (FIO-imported game record)
