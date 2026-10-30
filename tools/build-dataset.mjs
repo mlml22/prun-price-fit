@@ -16,23 +16,20 @@ import { BASKETS, DAY_MS } from './baskets.mjs';
 import { repairPerDay } from './depreciation.mjs';
 
 
-async function gameData(name, url) {
-  // committed static game data first (no network on a daily run)
-  const s = path.join(ROOT, 'data', 'static', name + '.json');
-  try { return JSON.parse(fs.readFileSync(s, 'utf8')); } catch { /* fall through */ }
-  const f = path.join(CACHE, name + '.json');
-  try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { /* fetch */ }
-  const r = await fetch(url, { headers: UA });
-  if (r.status !== 200) throw new Error('HTTP ' + r.status + ' ' + url);
-  const j = await r.json();
-  fs.writeFileSync(f, JSON.stringify(j));
-  return j;
+function gameData(name) {
+  // Static game structure is committed. Never fall back to a public API in CI.
+  const staticFile = path.join(ROOT, 'data', 'static', name + '.json');
+  const cacheFile = path.join(CACHE, name + '.json');
+  for (const f of [staticFile, cacheFile]) {
+    try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { /* next */ }
+  }
+  throw new Error(`missing static data: ${staticFile}; refresh it manually before running`);
 }
 
 const [recipes, materials, buildings] = await Promise.all([
-  gameData('recipes', 'https://api.prunplanner.org/data/recipes/'),
-  gameData('materials', 'https://api.prunplanner.org/data/materials/'),
-  gameData('buildings', 'https://api.prunplanner.org/data/buildings/'),
+  gameData('recipes'),
+  gameData('materials'),
+  gameData('buildings'),
 ]);
 
 const buildingWorkers = new Map();
