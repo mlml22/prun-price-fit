@@ -114,9 +114,17 @@ mean-reversion stays the primary signal and the supply score is used as context,
 
 ## Data sources (public, no auth)
 
-- `https://api.prunplanner.org/data/cxpc/{TICKER}/` - daily OHLCV history (FIO-imported game record)
-- `https://api.prunplanner.org/data/recipes/`, `/buildings/`, `/materials/` - game structure
-- `https://handbook.apex.prosperousuniverse.com/wiki/efficiency-factors/` - official consumables rates
+| source | used for | frequency |
+|---|---|---|
+| `https://api.prunplanner.org/data/cxpc/daily/` | daily OHLCV, **bulk** (`?days=3`, all exchanges) | **the only network call on a daily run** |
+| `https://api.prunplanner.org/data/recipes/`, `/buildings/`, `/materials/`, `/planets/` | game structure | committed under `data/static/`, refreshed manually only |
+| `https://prun.raylu.net/stats/data/prod-data-<month>.json` | monthly production / consumption / profit | once a day, cached 20 h (third-party site, not the PRUNplanner API) |
+| `https://handbook.apex.prosperousuniverse.com/wiki/efficiency-factors/` | official workforce consumables | documentation reference only |
+
+PRUNplanner documents a limit of **30 requests per minute per IP** on `cxpc/daily`, and notes that
+one request per exchange is enough for a daily refresh. This repo uses **one request per day** and a
+hard budget of 10 requests per run (`tools/pull-cxpc.mjs`), so a regression to per-ticker fetching
+fails CI instead of hammering the API.
 
 ## Honest caveats
 
