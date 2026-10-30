@@ -31,12 +31,18 @@ const PAUSE_MS = 1500;
 
 const args = process.argv.slice(2);
 const MODE = args.includes('--backfill') ? 'backfill' : args.includes('--rebuild') ? 'rebuild' : 'auto';
+
+// Hard request budget: the API author asked for gentle usage. A normal daily run must stay
+// at 1 request (3 on retries at most); a one-off backfill is capped separately.
+let REQUESTS = 0;
+const MAX_REQUESTS = MODE === 'backfill' ? 250 : 10;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
 const monthOf = (epoch) => new Date(epoch).toISOString().slice(0, 7);
 
 async function fetchJson(url, tries = 4) {
   for (let i = 1; i <= tries; i++) {
+    REQUESTS++;
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 180000);
     try {
@@ -162,6 +168,7 @@ async function rebuild() {
 }
 
 async function main() {
+  try {
   if (MODE === 'rebuild') return rebuild();
   if (MODE === 'backfill') { await backfill(); return rebuild(); }
   const months = fs.readdirSync(HIST).filter((f) => /^\d{4}-\d{2}\.jsonl\.gz$/.test(f));
@@ -172,6 +179,13 @@ async function main() {
     await incremental();
   }
   return rebuild();
+  } finally {
+    console.log(`requests used: ${REQUESTS} (budget ${MAX_REQUESTS})`);
+    if (REQUESTS > MAX_REQUESTS) {
+      console.error(`REQUEST BUDGET EXCEEDED: ${REQUESTS} > ${MAX_REQUESTS}`);
+      process.exitCode = 2;
+    }
+  }
 }
 
 main().catch((e) => { console.error('pull failed:', e.message); process.exitCode = 1; });
