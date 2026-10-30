@@ -508,7 +508,9 @@ for (const m of rayMonths) {
 const scoreFor = (t, d) => {
   // use the row's own month; if that month has no raylu data yet (e.g. the current month),
   // fall back to the most recent month that does (older information is never look-ahead)
-  const day = new Date(d); let y = day.getUTCFullYear(), mo = day.getUTCMonth();
+  // raylu monthly data is only published AFTER a month ends, so for a date inside month M we must
+  // use month M-1 (the last complete month), never M itself. Older months are a safe fallback.
+  const day = new Date(d); let y = day.getUTCFullYear(), mo = day.getUTCMonth() - 1; if (mo < 0) { mo = 11; y--; }
   for (let k = 0; k < 4; k++) { const mk = y + '-' + String(mo + 1).padStart(2, '0'); if (supplyScoreMap.has(mk + '|' + t)) return supplyScoreMap.get(mk + '|' + t); mo--; if (mo < 0) { mo = 11; y--; } }
   return null;
 };
@@ -578,6 +580,45 @@ for (const h of [30, 90]) {
 }
 console.log('combo IC (rank-average of mean-reversion and supply score):', JSON.stringify(comboIc));
 globalThis.__comboIc = comboIc;
+
+// ---- 2e) walk-forward validation (criteria pre-registered in docs/VALIDATION.md) ----
+const wfRows = modelRows.filter(r => r.r30 != null);
+const wfDates = [...new Set(wfRows.map(r => r.d))].sort((a, b) => a - b);
+const WF_TRAIN_DAYS = 365, WF_STEP = 30, WF_WARMUP_DAYS = 365;
+const wfWindows = [];
+for (let i = 0; i < wfDates.length; i += WF_STEP) {
+  const d = wfDates[i];
+  if (d < wfDates[0] + WF_WARMUP_DAYS * 86400000) continue;
+  const test = wfRows.filter(r => r.d === d && scoreFor(r.t, r.d) != null);
+  if (test.length < 40) continue;
+  const train = wfRows.filter(r => r.d >= d - WF_TRAIN_DAYS * 86400000 && r.d < d);
+  if (train.length < 2000) continue;
+  const fit = ols(train, 'r30');
+  const yR = rankify(test.map(r => r.r30));
+  const mrR = rankify(test.map(r => r.f1));
+  const ssR = rankify(test.map(r => scoreFor(r.t, r.d)));
+  const comboR = test.map((_, j) => (mrR[j] + ssR[j]) / 2);
+  const predR = rankify(test.map(r => fit.beta[0] + fit.beta[1] * r.f1 + fit.beta[2] * r.f2 + fit.beta[3] * r.f3));
+  const topSpread = (ranks) => {
+    const pairs = test.map((r, j) => [ranks[j], r.r30]).sort((a, b) => b[0] - a[0]);
+    const k = Math.max(5, Math.floor(pairs.length * 0.1));
+    const top = pairs.slice(0, k).reduce((a, b) => a + b[1], 0) / k;
+    const all = pairs.reduce((a, b) => a + b[1], 0) / pairs.length;
+    return (top - all) * 100;
+  };
+  wfWindows.push({ date: new Date(d).toISOString().slice(0, 10), n: test.length,
+    icCombo: +(corr(comboR, yR) * 100).toFixed(2), icMeanRev: +(corr(mrR, yR) * 100).toFixed(2),
+    icSupply: +(corr(ssR, yR) * 100).toFixed(2), icOls: +(corr(predR, yR) * 100).toFixed(2),
+    spreadCombo: +topSpread(comboR).toFixed(2) });
+}
+const wfAgg = (key) => { const v = wfWindows.map(w => w[key]); const m2 = v.reduce((a, b) => a + b, 0) / (v.length || 1); return { mean: +m2.toFixed(2), posPct: Math.round(100 * v.filter(x => x > 0).length / (v.length || 1)) }; };
+const wfSummary = { windows: wfWindows.length, combo: wfAgg('icCombo'), meanRev: wfAgg('icMeanRev'), supply: wfAgg('icSupply'), ols: wfAgg('icOls'), comboSpread: wfAgg('spreadCombo') };
+const WF_CRITERIA = { minComboIC: 15, minComboSpread: 3, minPosPct: 70, minWindows: 12 };
+const wfPass = wfSummary.windows >= WF_CRITERIA.minWindows && wfSummary.combo.mean >= WF_CRITERIA.minComboIC && wfSummary.comboSpread.mean >= WF_CRITERIA.minComboSpread && wfSummary.combo.posPct >= WF_CRITERIA.minPosPct;
+console.log('walk-forward: windows=' + wfSummary.windows + ' comboIC=' + wfSummary.combo.mean + '% (pos ' + wfSummary.combo.posPct + '%) spread=' + wfSummary.comboSpread.mean + 'pp | meanRev=' + wfSummary.meanRev.mean + '% | ols=' + wfSummary.ols.mean + '% => ' + (wfPass ? 'PASS' : 'FAIL'));
+fs.writeFileSync(path.join(SITE, 'validation.json'), JSON.stringify({ generatedAt: new Date().toISOString(),
+  method: 'walk-forward: train 365 days, test 30 days, step 30 days, non-overlapping test windows',
+  criteria: WF_CRITERIA, pass: wfPass, summary: wfSummary, windows: wfWindows }, null, 1));
 
 const z = (arr) => { const m = mean(arr), s = sd(arr) || 1; return (x) => (x - m) / s; };
 const zDemand = z(board.map(b => (b.recipeDownstream || 0) + (b.constructionDownstream || 0)));
