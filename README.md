@@ -93,7 +93,7 @@ The API author asked for gentler traffic. The puller therefore:
 - runs **once a day** (08:08 Beijing = 00:08 UTC).
 - the only outbound network request in the scheduled pipeline is the bulk `/data/cxpc/daily/` request. Recipes, buildings, materials, planets and monthly supply flows are committed static snapshots, so CI cannot fan out to other APIs.
 
-Backfill (rare, only when `data/history/` is empty) pages `since`/`until` in <=31-day windows per exchange:
+Backfill is **manual-only** and must never run inside the scheduled workflow. If `data/history/` is unexpectedly empty, the daily command fails before making any request. Manual backfill pages `since`/`until` in <=31-day windows per exchange:
 
 ```bash
 node tools/pull-cxpc.mjs --backfill   # paged, sequential, ~150 requests total
