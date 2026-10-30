@@ -203,15 +203,18 @@ const CACHE = path.join(ROOT, 'cache');
 const RAYLU = await loadRaylu(CACHE);
 let RAW_SET = new Set();
 let PLANETS = [];
-let RECIPES = [], BUILDINGS = [];
-try { RECIPES = JSON.parse(fs.readFileSync(path.join(CACHE, 'recipes.json'), 'utf8')); } catch { /* optional */ }
-try { BUILDINGS = JSON.parse(fs.readFileSync(path.join(CACHE, 'buildings.json'), 'utf8')); } catch { /* optional */ }
+const STATIC = path.join(ROOT, 'data', 'static');
+const readStatic = (n) => { try { return JSON.parse(fs.readFileSync(path.join(STATIC, n + '.json'), 'utf8')); } catch { return null; } };
+let RECIPES = readStatic('recipes') || [], BUILDINGS = readStatic('buildings') || [];
+if (!RECIPES.length) try { RECIPES = JSON.parse(fs.readFileSync(path.join(CACHE, 'recipes.json'), 'utf8')); } catch { /* optional */ }
+if (!BUILDINGS.length) try { BUILDINGS = JSON.parse(fs.readFileSync(path.join(CACHE, 'buildings.json'), 'utf8')); } catch { /* optional */ }
 RAW_SET = rawSet(RECIPES);
-try { PLANETS = JSON.parse(fs.readFileSync(path.join(CACHE, 'planets.json'), 'utf8')); }
+PLANETS = readStatic('planets') || null;
+if (!PLANETS) try { PLANETS = JSON.parse(fs.readFileSync(path.join(CACHE, 'planets.json'), 'utf8')); }
 catch {
-  const r = await fetch('https://api.prunplanner.org/data/planets/', { headers: { 'User-Agent': 'prun-price-fit/1.0' } });
-  if (r.status === 200) { PLANETS = await r.json(); fs.writeFileSync(path.join(CACHE, 'planets.json'), JSON.stringify(PLANETS)); }
+  if (!PLANETS) { const r = await fetch('https://api.prunplanner.org/data/planets/', { headers: { 'User-Agent': 'prun-price-fit/1.0' } }); if (r.status === 200) { PLANETS = await r.json(); fs.writeFileSync(path.join(CACHE, 'planets.json'), JSON.stringify(PLANETS)); } }
 }
+if (!PLANETS) PLANETS = [];
 const buildingOfWork = new Map(BUILDINGS.map(b => [b.building_ticker, b]));
 const recipesByOutput = new Map();
 for (const r of RECIPES) {
@@ -643,7 +646,7 @@ fs.writeFileSync(path.join(SITE, 'meta.json'), JSON.stringify({
   medianMaterialsCostShare: +(med(withLab.map(b => b.matCost / b.price)) * 100).toFixed(1),
   medianLabourCostShare: +(med(withLab.map(b => b.labourCost / b.price)) * 100).toFixed(1),
   boardSize: board.length, histFiles: fs.readdirSync(HIST).length,
-  sources: ['https://api.prunplanner.org/data/cxpc/{TICKER}/', 'https://api.prunplanner.org/data/recipes/', 'https://api.prunplanner.org/data/buildings/', 'https://api.prunplanner.org/data/materials/'],
+  sources: ['https://api.prunplanner.org/data/cxpc/daily/', 'https://api.prunplanner.org/data/recipes/', 'https://api.prunplanner.org/data/buildings/', 'https://api.prunplanner.org/data/materials/'],
 }, null, 1));
 console.log('fit rows:', methods.length, 'board:', board.length, 'meta written');
 console.log('cost shares (median): materials', (med(withLab.map(b => b.matCost / b.price)) * 100).toFixed(1) + '%, labour', (med(withLab.map(b => b.labourCost / b.price)) * 100).toFixed(1) + '%');
