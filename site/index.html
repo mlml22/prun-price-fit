@@ -67,7 +67,7 @@
 
   <section>
     <h2>原料（采掘类）供给与预测<span class="dim" id="rawWhen"></span></h2>
-    <div class="note" style="margin-bottom:8px">原料由采掘建筑（RIG/EXT/COL）产出，没有上游配方成本；这里用社区统计站 <a href="https://prun.raylu.net/stats/" style="color:var(--acc)">prun.raylu.net</a> 的<b>月度产量/消耗量</b>来刻画供给，并用「产量过剩 + 供给增速 + 单位利润」的月度模型预测方向；把月度供给面做成<b>横截面分位打分</b>后与日线均值回归按排名平均合并（合并后 30 天 IC <b>35.4%</b>、90 天 <b>34.0%</b>，均高于单用均值回归 28.8%/24.5% 与单用供给分 19.6%/22.1%）；其中 <b>采掘毛利率</b>经实测是最强因子：<b>IC −36.7%、18 个月全为负</b>（毛利越高 → 下月价格越可能跌，矿工会涌进来）。单位利润 IC −17.3%。</div>
+    <div class="note" style="margin-bottom:8px">原料由采掘建筑（RIG/EXT/COL）产出，没有上游配方成本；这里使用仓库内冻结的 <a href="https://prun.raylu.net/stats/" style="color:var(--acc)">prun.raylu.net</a> <b>月度产量/消耗量快照</b>来刻画供给，并用「产量过剩 + 供给增速 + 单位利润」的月度模型预测方向。把月度供给面做成<b>横截面分位打分</b>后与日线均值回归按排名平均合并（修正未来函数后，30 天 IC <b>29.5%</b>、90 天 <b>24.7%</b>；单用均值回归为 28.5%/24.5%，单用供给分为 11.7%/9.3%）。<b>采掘毛利率</b>单独作因子时 IC −36.7%、18 个月全为负（毛利越高 → 下月价格越可能跌，矿工会涌进来），但样本少且系数不稳，只作方向参考。</div>
     <input type="search" id="rawFilter" placeholder="过滤原料（代码/中文名）" style="margin-bottom:8px">
     <div class="wrap"><table id="rawTable"><thead><tr><th>原料</th><th>月产量</th><th>月消耗</th><th>过剩%</th><th>供给增速</th><th>单位利润</th><th>月产值</th><th>模型预期(次月)</th><th>采掘成本(最优行星)</th><th>行星数</th><th>最优丰度</th></tr></thead><tbody></tbody></table></div>
   </section>
