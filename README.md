@@ -89,7 +89,7 @@ The API author asked for gentler traffic. The puller therefore:
 - keeps history as **monthly files** in `data/history/YYYY-MM.jsonl.gz` (committed). The daily job
   merges the 3-day slice into the current month file and rebuilds the combined data file; old months never change.
 - sends a contactable User-Agent: `prun-price-fit/1.0 (https://github.com/mlml22/prun-price-fit)`.
-- makes sequential requests with a 1.5 s pause and honours `Retry-After` on 429/5xx.
+- the daily request is **single-attempt**: timeout, 429, 5xx, malformed response or network failure stops the job immediately; existing data is preserved and nothing is retried. Manual backfill pages sequentially with a 1.5 s pause and also stops on the first failure.
 - runs **once a day** (08:08 Beijing = 00:08 UTC). Before any network call, `tools/audit-request-policy.mjs` verifies there is exactly one cron, one workflow pull, one allowed `fetch` call site, the `?days=3` bulk path, and a pre-request budget fuse.
 - the only outbound network request in the scheduled pipeline is the bulk `/data/cxpc/daily/` request. Recipes, buildings, materials, planets and monthly supply flows are committed static snapshots, so CI cannot fan out to other APIs.
 
@@ -124,7 +124,7 @@ mean-reversion stays the primary signal and the supply score is used as context,
 
 PRUNplanner documents a limit of **30 requests per minute per IP** on `cxpc/daily`, and notes that
 one request per exchange is enough for a daily refresh. This repo uses **one request per day** and a
-hard budget of 10 requests per run (`tools/pull-cxpc.mjs`), so a regression to per-ticker fetching
+hard budget of **1 request per daily run** (`tools/pull-cxpc.mjs`) and no automatic retry, so a regression to per-ticker fetching
 fails CI instead of hammering the API. Static snapshots can be refreshed manually; for example,
 `node tools/pull-raylu.mjs` refreshes the auxiliary monthly supply file without adding work to CI.
 
