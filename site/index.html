@@ -253,7 +253,7 @@ const TOKEN_KEY = 'prun_fit_pat';
 const $b = (id) => document.getElementById(id);
 function setStatus(t) { $b('runStatus').textContent = t; }
 function showBox(on) { $b('tokenBox').style.display = on ? 'flex' : 'none'; if (on) $b('tokenInput').focus(); }
-$b('nextRun').textContent = '自动运行：每天 08:08 / 20:08（北京）';
+$b('nextRun').textContent = '自动运行：每天 08:08（北京）';
 $b('tokenLink').addEventListener('click', (e) => { e.preventDefault(); const open = $b('tokenBox').style.display !== 'flex'; showBox(open); if (open) $b('tokenInput').value = localStorage.getItem(TOKEN_KEY) || ''; });
 $b('tokenSave').addEventListener('click', () => { const v = $b('tokenInput').value.trim(); if (!v) return; localStorage.setItem(TOKEN_KEY, v); showBox(false); setStatus('token 已保存在本机'); });
 $b('tokenClear').addEventListener('click', () => { localStorage.removeItem(TOKEN_KEY); $b('tokenInput').value = ''; setStatus('token 已清除'); });
