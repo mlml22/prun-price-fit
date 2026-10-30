@@ -3,4 +3,5 @@ node_modules/
 data/*
 !data/history/
 !data/history/**
-
+!data/static/
+!data/static/**
