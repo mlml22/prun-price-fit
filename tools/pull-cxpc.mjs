@@ -10,7 +10,7 @@
 //   node tools/pull-cxpc.mjs --backfill   -> page history from 2023-07-01 in <=31-day windows per exchange
 //   node tools/pull-cxpc.mjs --rebuild    -> only rebuild data/cxpc-daily.jsonl.gz from month files
 //
-// Politeness: sequential requests, 1.5 s pause, Retry-After honoured, UA carries the repo URL.
+// Politeness: one single-attempt request per day; manual backfill is sequential and stops on failure.
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -32,36 +32,30 @@ const PAUSE_MS = 1500;
 const args = process.argv.slice(2);
 const MODE = args.includes('--backfill') ? 'backfill' : args.includes('--rebuild') ? 'rebuild' : 'auto';
 
-// Hard request budget: the API author asked for gentle usage. A normal daily run must stay
-// at 1 request (3 on retries at most); a one-off backfill is capped separately.
+// Hard request budget: the API author asked for gentle usage. A daily run is single-attempt:
+// if the request fails, keep the old data and wait for the next scheduled day. Never retry.
 let REQUESTS = 0;
-const MAX_REQUESTS = MODE === 'backfill' ? 250 : 10;
+const MAX_REQUESTS = MODE === 'backfill' ? 250 : 1;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
 const monthOf = (epoch) => new Date(epoch).toISOString().slice(0, 7);
 
-async function fetchJson(url, tries = 4) {
-  for (let i = 1; i <= tries; i++) {
-    if (REQUESTS >= MAX_REQUESTS) {
-      throw new Error(`request budget exhausted before request ${REQUESTS + 1}/${MAX_REQUESTS}`);
-    }
-    REQUESTS++;
-    const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 180000);
-    try {
-      const res = await fetch(url, { headers: UA, signal: ctl.signal });
-      if (res.status === 200) return await res.json();
-      if (res.status === 429 || res.status >= 500) {
-        const wait = Number(res.headers.get('retry-after')) * 1000 || 5000 * i;
-        console.log(`  ${res.status} -> wait ${Math.round(wait / 1000)}s (attempt ${i}/${tries})`);
-        await sleep(wait);
-        continue;
-      }
-      throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 160)}`);
-    } catch (e) {
-      if (i === tries) throw e;
-      await sleep(3000 * i);
-    } finally { clearTimeout(timer); }
+async function fetchJson(url) {
+  // Single-attempt policy: fail immediately and preserve existing data. Never retry.
+  if (REQUESTS >= MAX_REQUESTS) {
+    throw new Error(`request budget exhausted before request ${REQUESTS + 1}/${MAX_REQUESTS}`);
+  }
+  REQUESTS++;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 180000);
+  try {
+    const res = await fetch(url, { headers: UA, signal: ctl.signal });
+    if (res.status === 200) return await res.json();
+    const retryAfter = res.headers.get('retry-after');
+    const hint = retryAfter ? ` (server Retry-After: ${retryAfter}s; not retrying)` : '';
+    throw new Error(`HTTP ${res.status}${hint}: ${(await res.text()).slice(0, 160)}`);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -122,14 +116,10 @@ async function backfill() {
     while (cursor < today) {
       const until = Math.min(cursor + 30 * DAY, today);
       const url = `${BASE}?since=${ymd(cursor)}&until=${ymd(until)}&exchange=${ex}`;
-      try {
-        const j = await fetchJson(url);
-        const rows = j.rows || [];
-        const r = mergeRows(rows);
-        console.log(`  ${ex} ${ymd(cursor)}..${ymd(until)} rows=${rows.length} +${r.added}`);
-      } catch (e) {
-        console.log(`  ${ex} ${ymd(cursor)}..${ymd(until)} FAILED: ${e.message}`);
-      }
+      const j = await fetchJson(url);
+      const rows = j.rows || [];
+      const r = mergeRows(rows);
+      console.log(`  ${ex} ${ymd(cursor)}..${ymd(until)} rows=${rows.length} +${r.added}`);
       cursor = until + DAY;
       await sleep(PAUSE_MS);
     }
@@ -161,7 +151,7 @@ async function rebuild() {
   const manifest = {
     pulledAt: new Date().toISOString(),
     source: 'https://api.prunplanner.org/data/cxpc/daily/ (bulk, FIO-imported game data)',
-    policy: 'one bulk request per day; history kept as monthly files in data/history/',
+    policy: 'one bulk request per day, single attempt with no retries; history kept as monthly files in data/history/',
     months: files.length, series: series.size, rows: rows.length,
     firstDate: ymd(minE), lastDate: ymd(maxE),
     gzBytes: fs.statSync(path.join(DATA, 'cxpc-daily.jsonl.gz')).size,
