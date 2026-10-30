@@ -100,6 +100,18 @@ node tools/pull-cxpc.mjs --rebuild    # rebuild data/cxpc-daily.jsonl.gz from mo
 node tools/pull-cxpc.mjs              # daily incremental (default)
 ```
 
+
+## Validation
+
+The signal is checked with a **walk-forward** test (train 365 days, test the next 30 days, step 30 days,
+non-overlapping windows). The success criteria were written down before the test in
+[`docs/VALIDATION.md`](docs/VALIDATION.md); current result: 18 windows, combo IC 26.2%, top-decile spread
++9.6pp, all windows positive -> **PASS**. `site/data/validation.json` holds the per-window numbers.
+
+Important: after fixing a look-ahead bug (the monthly supply score used to read the row's own month),
+the combo's out-of-sample IC (26.2%) is slightly **below** mean-reversion alone (28.5%), so
+mean-reversion stays the primary signal and the supply score is used as context, not as extra weight.
+
 ## Data sources (public, no auth)
 
 - `https://api.prunplanner.org/data/cxpc/{TICKER}/` - daily OHLCV history (FIO-imported game record)
